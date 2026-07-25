@@ -13,7 +13,7 @@ struct ContentView: View {
                     isChoosingFolder = true
                 }
             case .scanning where model.catalogScan == nil:
-                ScanningView()
+                ScanningView(progress: model.scanProgress)
             case .scanning, .loaded:
                 CatalogView(
                     model: model,
@@ -88,14 +88,16 @@ private struct WelcomeView: View {
 }
 
 private struct ScanningView: View {
+    let progress: RepositoryScanProgress?
+
     var body: some View {
         VStack(spacing: 14) {
             ProgressView()
                 .controlSize(.large)
             Text("Scanning projects and fetching GitHub remotes…")
                 .font(.headline)
-            Text("Large catalogs or slow networks can take a moment.")
-                .foregroundStyle(.secondary)
+            ScanStatusLine(progress: progress)
+                .frame(minWidth: 360)
         }
         .padding(48)
         .accessibilityElement(children: .combine)
@@ -127,6 +129,11 @@ private struct CatalogView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .safeAreaInset(edge: .bottom) {
+            if model.isScanning {
+                ScanStatusLine(progress: model.scanProgress)
+            }
+        }
         .toolbar {
             ToolbarItemGroup {
                 Button("Choose Folder", systemImage: "folder") {
@@ -149,6 +156,40 @@ private struct CatalogView: View {
                 }
             }
         }
+    }
+}
+
+private struct ScanStatusLine: View {
+    let progress: RepositoryScanProgress?
+
+    private var displayedProgress: RepositoryScanProgress {
+        progress ?? .discoveringRepositories
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if displayedProgress.isFinished {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .accessibilityHidden(true)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityHidden(true)
+            }
+
+            Text(displayedProgress.message)
+                .font(.callout)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(displayedProgress.message)
     }
 }
 

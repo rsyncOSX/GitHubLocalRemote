@@ -6,6 +6,30 @@ enum ScanPhase: Equatable {
     case loaded
 }
 
+enum RepositoryScanProgress: Equatable, Sendable {
+    case discoveringRepositories
+    case checking(repositoryName: String, number: Int, total: Int)
+    case finished(repositoryName: String, number: Int, total: Int)
+
+    var message: String {
+        switch self {
+        case .discoveringRepositories:
+            "Finding Git repositories…"
+        case let .checking(repositoryName, number, total):
+            "Checking \(repositoryName) (\(number) of \(total))…"
+        case let .finished(repositoryName, number, total):
+            "Finished \(repositoryName) (\(number) of \(total))"
+        }
+    }
+
+    var isFinished: Bool {
+        if case .finished = self {
+            return true
+        }
+        return false
+    }
+}
+
 enum BranchSyncStatus: String, CaseIterable, Sendable {
     case localAhead
     case inSync

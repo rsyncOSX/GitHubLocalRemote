@@ -8,6 +8,7 @@ final class AppModel {
     var catalogScan: CatalogScan?
     var selectedProjectID: ProjectScan.ID?
     var errorMessage: String?
+    var scanProgress: RepositoryScanProgress?
 
     @ObservationIgnored private let scanner = RepositoryScanner()
     @ObservationIgnored private var scanTask: Task<Void, Never>?
@@ -36,10 +37,14 @@ final class AppModel {
         scanTask?.cancel()
         phase = .scanning
         errorMessage = nil
+        scanProgress = .discoveringRepositories
 
         scanTask = Task {
             do {
-                let result = try await scanner.scan(folderURL: folderURL)
+                let result = try await scanner.scan(folderURL: folderURL) { [weak self] progress in
+                    guard !Task.isCancelled else { return }
+                    self?.scanProgress = progress
+                }
                 guard !Task.isCancelled else { return }
 
                 catalogScan = result
@@ -51,11 +56,13 @@ final class AppModel {
                     selectedProjectID = result.projects.first?.id
                 }
                 phase = .loaded
+                scanProgress = nil
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
                 phase = catalogScan == nil ? .idle : .loaded
+                scanProgress = nil
                 errorMessage = error.localizedDescription
             }
         }

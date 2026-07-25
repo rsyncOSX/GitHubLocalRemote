@@ -17,13 +17,21 @@ enum RepositoryScannerError: LocalizedError, Sendable {
 struct RepositoryScanner: Sendable {
     private let git = GitCommandRunner()
 
-    func scan(folderURL: URL) async throws -> CatalogScan {
+    func scan(
+        folderURL: URL,
+        progress: @escaping @MainActor @Sendable (RepositoryScanProgress) -> Void
+    ) async throws -> CatalogScan {
         try await Task.detached(priority: .userInitiated) {
-            try scanSynchronously(folderURL: folderURL)
+            try await scanSynchronously(folderURL: folderURL, progress: progress)
         }.value
     }
 
-    private func scanSynchronously(folderURL: URL) throws -> CatalogScan {
+    private func scanSynchronously(
+        folderURL: URL,
+        progress: @escaping @MainActor @Sendable (RepositoryScanProgress) -> Void
+    ) async throws -> CatalogScan {
+        await progress(.discoveringRepositories)
+
         let fileManager = FileManager.default
         guard let children = try? fileManager.contentsOfDirectory(
             at: folderURL,
@@ -49,11 +57,32 @@ struct RepositoryScanner: Sendable {
         }
 
         var projects: [ProjectScan] = []
-        for repositoryURL in gitRepositories {
-            guard let remote = githubRemote(in: repositoryURL) else {
-                continue
+        for (offset, repositoryURL) in gitRepositories.enumerated() {
+            try Task.checkCancellation()
+
+            let repositoryNumber = offset + 1
+            await progress(
+                .checking(
+                    repositoryName: repositoryURL.lastPathComponent,
+                    number: repositoryNumber,
+                    total: gitRepositories.count
+                )
+            )
+
+            if let remote = githubRemote(in: repositoryURL) {
+                projects.append(
+                    scanRepository(at: repositoryURL, remoteName: remote.name, remote: remote.remote)
+                )
             }
-            projects.append(scanRepository(at: repositoryURL, remoteName: remote.name, remote: remote.remote))
+
+            await progress(
+                .finished(
+                    repositoryName: repositoryURL.lastPathComponent,
+                    number: repositoryNumber,
+                    total: gitRepositories.count
+                )
+            )
+            await Task.yield()
         }
 
         return CatalogScan(

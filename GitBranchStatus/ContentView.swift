@@ -147,14 +147,6 @@ private struct CatalogView: View {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.isScanning)
             }
-
-            if model.isScanning {
-                ToolbarItem {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel("Scanning projects")
-                }
-            }
         }
     }
 }

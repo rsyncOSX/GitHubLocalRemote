@@ -1,4 +1,5 @@
 import Foundation
+import ProcessCommand
 
 struct GitCommandResult: Sendable {
     let output: String
@@ -67,3 +68,4 @@ struct GitCommandRunner: Sendable {
         return result
     }
 }
+

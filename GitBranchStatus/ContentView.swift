@@ -12,8 +12,10 @@ struct ContentView: View {
                 WelcomeView {
                     isChoosingFolder = true
                 }
+/*
             case .scanning where model.catalogScan == nil:
                 ScanningView(progress: model.scanProgress)
+*/
             case .scanning, .loaded:
                 CatalogView(
                     model: model,

@@ -69,8 +69,8 @@ struct RepositoryScanner: Sendable {
                 )
             )
 
-            if let remote = githubRemote(in: repositoryURL) {
-                projects.append(
+            if let remote = await githubRemote(in: repositoryURL) {
+                await projects.append(
                     scanRepository(at: repositoryURL, remoteName: remote.name, remote: remote.remote)
                 )
             }
@@ -94,8 +94,8 @@ struct RepositoryScanner: Sendable {
         )
     }
 
-    private func githubRemote(in repositoryURL: URL) -> (name: String, remote: GitHubRemote)? {
-        guard let namesOutput = try? git.run(["remote"], in: repositoryURL).output else {
+    private func githubRemote(in repositoryURL: URL) async -> (name: String, remote: GitHubRemote)? {
+        guard let namesOutput = try? await git.run(["remote"], in: repositoryURL).output else {
             return nil
         }
 
@@ -113,7 +113,7 @@ struct RepositoryScanner: Sendable {
             }
 
         for name in names {
-            guard let remoteURL = try? git.run(["remote", "get-url", name], in: repositoryURL).output,
+            guard let remoteURL = try? await git.run(["remote", "get-url", name], in: repositoryURL).output,
                   let githubRemote = GitHubRemote.parse(remoteURL)
             else {
                 continue
@@ -128,8 +128,8 @@ struct RepositoryScanner: Sendable {
         at repositoryURL: URL,
         remoteName: String,
         remote: GitHubRemote
-    ) -> ProjectScan {
-        let fetchResult = try? git.run(
+    ) async -> ProjectScan {
+        let fetchResult = try? await git.run(
             ["fetch", "--prune", "--quiet", remoteName],
             in: repositoryURL,
             allowFailure: true
@@ -146,11 +146,11 @@ struct RepositoryScanner: Sendable {
         }
 
         do {
-            let localReferences = try references(
+            let localReferences = try await references(
                 arguments: ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads/"],
                 in: repositoryURL
             )
-            let remoteReferences = try references(
+            let remoteReferences = try await references(
                 arguments: [
                     "for-each-ref",
                     "--format=%(refname)%09%(objectname)",
@@ -165,13 +165,15 @@ struct RepositoryScanner: Sendable {
                 .union(remoteReferences.keys)
                 .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 
-            let branches = branchNames.map { branchName in
-                compare(
+            var branches: [BranchRecord] = []
+            for branchName in branchNames {
+                let branch = await compare(
                     branchName: branchName,
                     localOID: localReferences[branchName],
                     remoteOID: remoteReferences[branchName],
                     repositoryURL: repositoryURL
                 )
+                branches.append(branch)
             }
 
             return ProjectScan(
@@ -206,8 +208,8 @@ struct RepositoryScanner: Sendable {
         arguments: [String],
         in repositoryURL: URL,
         removingPrefix prefix: String? = nil
-    ) throws -> [String: String] {
-        let output = try git.run(arguments, in: repositoryURL).output
+    ) async throws -> [String: String] {
+        let output = try await git.run(arguments, in: repositoryURL).output
         guard !output.isEmpty else { return [:] }
 
         return try output
@@ -231,12 +233,12 @@ struct RepositoryScanner: Sendable {
         localOID: String?,
         remoteOID: String?,
         repositoryURL: URL
-    ) -> BranchRecord {
+    ) async -> BranchRecord {
         let id = "\(repositoryURL.standardizedFileURL.path)#\(branchName)"
 
         switch (localOID, remoteOID) {
         case let (.some(local), .some(remote)):
-            let counts = divergenceCounts(localOID: local, remoteOID: remote, repositoryURL: repositoryURL)
+            let counts = await divergenceCounts(localOID: local, remoteOID: remote, repositoryURL: repositoryURL)
             return BranchRecord(
                 id: id,
                 name: branchName,
@@ -275,8 +277,8 @@ struct RepositoryScanner: Sendable {
         localOID: String,
         remoteOID: String,
         repositoryURL: URL
-    ) -> (ahead: Int, behind: Int) {
-        guard let output = try? git.run(
+    ) async -> (ahead: Int, behind: Int) {
+        guard let output = try? await git.run(
             ["rev-list", "--left-right", "--count", "\(localOID)...\(remoteOID)"],
             in: repositoryURL
         ).output else {

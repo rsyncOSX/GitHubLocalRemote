@@ -3,13 +3,13 @@ import XCTest
 
 final class GitCommandRunner2Tests: XCTestCase {
     private let originalRunner = GitCommandRunner()
-    private let processGitRunner = GitCommandRunner2()
+    private let processGitRunner = GitCommandRunner()
 
     @MainActor
     func testSuccessfulCommandMatchesOriginalRunner() async throws {
         let arguments = ["rev-parse", "--show-toplevel"]
 
-        let expected = try originalRunner.run(arguments, in: repositoryURL)
+        let expected = try await originalRunner.run(arguments, in: repositoryURL)
         let actual = try await processGitRunner.run(arguments, in: repositoryURL)
 
         assertEqual(actual, expected)
@@ -25,10 +25,10 @@ final class GitCommandRunner2Tests: XCTestCase {
         )
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        _ = try originalRunner.run(["init", "--quiet"], in: directory)
+        _ = try await originalRunner.run(["init", "--quiet"], in: directory)
         let arguments = ["rev-parse", "--show-toplevel"]
 
-        let expected = try originalRunner.run(arguments, in: directory)
+        let expected = try await originalRunner.run(arguments, in: directory)
         let actual = try await processGitRunner.run(arguments, in: directory)
 
         assertEqual(actual, expected)
@@ -36,7 +36,7 @@ final class GitCommandRunner2Tests: XCTestCase {
 
     @MainActor
     func testEmptyArgumentsMatchOriginalRunnerWhenFailureIsAllowed() async throws {
-        let expected = try originalRunner.run(
+        let expected = try await originalRunner.run(
             [],
             in: repositoryURL,
             allowFailure: true
@@ -58,7 +58,7 @@ final class GitCommandRunner2Tests: XCTestCase {
             "refs/heads/__GitCommandRunner2_missing_branch__",
         ]
 
-        let expected = try originalRunner.run(
+        let expected = try await originalRunner.run(
             arguments,
             in: repositoryURL,
             allowFailure: true
@@ -82,7 +82,7 @@ final class GitCommandRunner2Tests: XCTestCase {
             "runner2-parity",
         ]
 
-        let expected = try originalRunner.run(
+        let expected = try await originalRunner.run(
             arguments,
             in: repositoryURL,
             allowFailure: true
@@ -106,7 +106,7 @@ final class GitCommandRunner2Tests: XCTestCase {
             "--verify",
             "refs/heads/__GitCommandRunner2_missing_branch__",
         ]
-        let expectedResult = try originalRunner.run(
+        let expectedResult = try await originalRunner.run(
             arguments,
             in: repositoryURL,
             allowFailure: true

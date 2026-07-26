@@ -1,0 +1,15 @@
+{
+  "originHash" : "6b6056bf281edc1ef97dd6fecdade5dba406bd874bd8b635cdcc9df4dcaf1d13",
+  "pins" : [
+    {
+      "identity" : "processgit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/rsyncOSX/ProcessGit",
+      "state" : {
+        "revision" : "ef6bd790832473cc86ab99908cabaefb931e4ffb",
+        "version" : "1.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}

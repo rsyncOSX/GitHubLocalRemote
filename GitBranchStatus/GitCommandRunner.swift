@@ -1,4 +1,12 @@
+//
+//  GitCommandRunner2.swift
+//  GitBranchStatus
+//
+//  Created by Thomas Evensen on 26/07/2026.
+//
+
 import Foundation
+import ProcessGit
 
 struct GitCommandResult: Sendable {
     let output: String
@@ -25,42 +33,37 @@ struct GitCommandRunner: Sendable {
         _ arguments: [String],
         in directory: URL,
         allowFailure: Bool = false
-    ) throws -> GitCommandResult {
-        let process = Process()
-        let standardOutput = Pipe()
-        let standardError = Pipe()
+    ) async throws -> GitCommandResult {
+        let process = ProcessGit(
+            command: "/usr/bin/git",
+            arguments: arguments,
+            currentDirectoryURL: directory
+        )
 
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = arguments
-        process.currentDirectoryURL = directory
-        process.standardOutput = standardOutput
-        process.standardError = standardError
-
+        let processResult: ProcessGitResult
         do {
-            try process.run()
+            processResult = try await process.run()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw GitCommandError.launchFailed(error.localizedDescription)
         }
 
-        let outputData = standardOutput.fileHandleForReading.readDataToEndOfFile()
-        let errorData = standardError.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        let output = String(decoding: outputData, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let errorOutput = String(decoding: errorData, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let result = GitCommandResult(
-            output: output,
-            errorOutput: errorOutput,
-            exitCode: process.terminationStatus
+            output: String(decoding: processResult.standardOutput, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            errorOutput: String(decoding: processResult.standardError, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            exitCode: processResult.exitCode
         )
 
         if result.exitCode != 0, !allowFailure {
             throw GitCommandError.commandFailed(
                 arguments: arguments,
                 exitCode: result.exitCode,
-                message: errorOutput.isEmpty ? "Unknown Git error" : errorOutput
+                message: result.errorOutput.isEmpty
+                    ? "Unknown Git error"
+                    : result.errorOutput
             )
         }
 

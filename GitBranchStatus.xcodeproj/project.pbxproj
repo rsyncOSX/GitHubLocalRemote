@@ -11,15 +11,14 @@
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* ContentView.swift */; };
 		A10000000000000000000003 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* AppModel.swift */; };
 		A10000000000000000000004 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* Models.swift */; };
-		A10000000000000000000005 /* GitCommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* GitCommandRunner.swift */; };
 		A10000000000000000000006 /* RepositoryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* RepositoryScanner.swift */; };
 		A10000000000000000000007 /* ModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* ModelsTests.swift */; };
 		A10000000000000000000008 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* XCTest.framework */; };
 		A1000000000000000000000A /* WelcomeRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* WelcomeRenderingTests.swift */; };
 		A1000000000000000000000B /* GitBranchStatus.icon in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* GitBranchStatus.icon */; };
 		A1000000000000000000000C /* GitCommandRunner2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* GitCommandRunner2Tests.swift */; };
-		E9208E7C3015C35800106A25 /* ProcessGit in Frameworks */ = {isa = PBXBuildFile; productRef = E9208E7B3015C35800106A25 /* ProcessGit */; };
-		E96B98E33015CCA500D845CE /* GitCommandRunner2.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96B98E23015CC9900D845CE /* GitCommandRunner2.swift */; };
+		E90323C03016409C00714AC8 /* ProcessGit in Frameworks */ = {isa = PBXBuildFile; productRef = E90323BF3016409C00714AC8 /* ProcessGit */; };
+		E96B98E33015CCA500D845CE /* GitCommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96B98E23015CC9900D845CE /* GitCommandRunner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -37,7 +36,6 @@
 		B10000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		B10000000000000000000004 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
-		B10000000000000000000005 /* GitCommandRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner.swift; sourceTree = "<group>"; };
 		B10000000000000000000006 /* RepositoryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryScanner.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* ModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000008 /* GitBranchStatus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GitBranchStatus.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -47,7 +45,7 @@
 		B1000000000000000000000C /* WelcomeRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeRenderingTests.swift; sourceTree = "<group>"; };
 		B1000000000000000000000D /* GitBranchStatus.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = GitBranchStatus.icon; sourceTree = "<group>"; };
 		B1000000000000000000000E /* GitCommandRunner2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner2Tests.swift; sourceTree = "<group>"; };
-		E96B98E23015CC9900D845CE /* GitCommandRunner2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner2.swift; sourceTree = "<group>"; };
+		E96B98E23015CC9900D845CE /* GitCommandRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,7 +53,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E9208E7C3015C35800106A25 /* ProcessGit in Frameworks */,
+				E90323C03016409C00714AC8 /* ProcessGit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -84,12 +82,11 @@
 		G10000000000000000000002 /* GitBranchStatus */ = {
 			isa = PBXGroup;
 			children = (
-				E96B98E23015CC9900D845CE /* GitCommandRunner2.swift */,
+				E96B98E23015CC9900D845CE /* GitCommandRunner.swift */,
 				B10000000000000000000001 /* GitBranchStatusApp.swift */,
 				B10000000000000000000002 /* ContentView.swift */,
 				B10000000000000000000003 /* AppModel.swift */,
 				B10000000000000000000004 /* Models.swift */,
-				B10000000000000000000005 /* GitCommandRunner.swift */,
 				B10000000000000000000006 /* RepositoryScanner.swift */,
 				B1000000000000000000000B /* Info.plist */,
 			);
@@ -140,7 +137,7 @@
 			);
 			name = GitBranchStatus;
 			packageProductDependencies = (
-				E9208E7B3015C35800106A25 /* ProcessGit */,
+				E90323BF3016409C00714AC8 /* ProcessGit */,
 			);
 			productName = GitBranchStatus;
 			productReference = B10000000000000000000008 /* GitBranchStatus.app */;
@@ -194,7 +191,7 @@
 			mainGroup = G10000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E9208E7A3015C35800106A25 /* XCLocalSwiftPackageReference "../ProcessGit" */,
+				E90323BE3016409C00714AC8 /* XCRemoteSwiftPackageReference "ProcessGit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = G10000000000000000000005 /* Products */;
@@ -224,11 +221,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* GitBranchStatusApp.swift in Sources */,
-				E96B98E33015CCA500D845CE /* GitCommandRunner2.swift in Sources */,
+				E96B98E33015CCA500D845CE /* GitCommandRunner.swift in Sources */,
 				A10000000000000000000002 /* ContentView.swift in Sources */,
 				A10000000000000000000003 /* AppModel.swift in Sources */,
 				A10000000000000000000004 /* Models.swift in Sources */,
-				A10000000000000000000005 /* GitCommandRunner.swift in Sources */,
 				A10000000000000000000006 /* RepositoryScanner.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -402,17 +398,21 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCLocalSwiftPackageReference section */
-		E9208E7A3015C35800106A25 /* XCLocalSwiftPackageReference "../ProcessGit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../ProcessGit;
+/* Begin XCRemoteSwiftPackageReference section */
+		E90323BE3016409C00714AC8 /* XCRemoteSwiftPackageReference "ProcessGit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/rsyncOSX/ProcessGit";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
+			};
 		};
-/* End XCLocalSwiftPackageReference section */
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		E9208E7B3015C35800106A25 /* ProcessGit */ = {
+		E90323BF3016409C00714AC8 /* ProcessGit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E9208E7A3015C35800106A25 /* XCLocalSwiftPackageReference "../ProcessGit" */;
+			package = E90323BE3016409C00714AC8 /* XCRemoteSwiftPackageReference "ProcessGit" */;
 			productName = ProcessGit;
 		};
 /* End XCSwiftPackageProductDependency section */

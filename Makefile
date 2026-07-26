@@ -1,3 +1,4 @@
+sudo ditto "build/Build/Products/Release/GitBranchStatus.app" "/Applications/GitBranchStatus.app"
 APP := GitBranchStatus
 PROJECT := $(APP).xcodeproj
 SCHEME := $(APP)

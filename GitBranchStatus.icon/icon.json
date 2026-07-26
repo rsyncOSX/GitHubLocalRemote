@@ -14,8 +14,8 @@
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
-              0,
-              0
+              58.53125,
+              23.2421875
             ]
           }
         }
@@ -23,6 +23,10 @@
       "shadow" : {
         "kind" : "neutral",
         "opacity" : 0.35
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
       }
     }
   ],

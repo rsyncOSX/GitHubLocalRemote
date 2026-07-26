@@ -16,19 +16,30 @@ enum RepositoryScannerError: LocalizedError, Sendable {
 
 struct RepositoryScanner: Sendable {
     private let git = GitCommandRunner()
+    private let fetchTimeout: Duration
+
+    init(fetchTimeout: Duration = .seconds(15)) {
+        self.fetchTimeout = fetchTimeout
+    }
 
     func scan(
         folderURL: URL,
-        progress: @escaping @MainActor @Sendable (RepositoryScanProgress) -> Void
+        progress: @escaping @MainActor @Sendable (RepositoryScanProgress) -> Void,
+        update: @escaping @MainActor @Sendable (CatalogScan) -> Void = { _ in }
     ) async throws -> CatalogScan {
         try await Task.detached(priority: .userInitiated) {
-            try await scanSynchronously(folderURL: folderURL, progress: progress)
+            try await scanSynchronously(
+                folderURL: folderURL,
+                progress: progress,
+                update: update
+            )
         }.value
     }
 
     private func scanSynchronously(
         folderURL: URL,
-        progress: @escaping @MainActor @Sendable (RepositoryScanProgress) -> Void
+        progress: @escaping @MainActor @Sendable (RepositoryScanProgress) -> Void,
+        update: @escaping @MainActor @Sendable (CatalogScan) -> Void
     ) async throws -> CatalogScan {
         await progress(.discoveringRepositories)
 
@@ -70,8 +81,19 @@ struct RepositoryScanner: Sendable {
             )
 
             if let remote = await githubRemote(in: repositoryURL) {
-                await projects.append(
-                    scanRepository(at: repositoryURL, remoteName: remote.name, remote: remote.remote)
+                let project = await scanRepository(
+                    at: repositoryURL,
+                    remoteName: remote.name,
+                    remote: remote.remote
+                )
+                projects.append(project)
+                await update(
+                    catalogScan(
+                        folderURL: folderURL,
+                        candidateDirectoryCount: candidateDirectories.count,
+                        gitRepositoryCount: gitRepositories.count,
+                        projects: projects
+                    )
                 )
             }
 
@@ -85,10 +107,24 @@ struct RepositoryScanner: Sendable {
             await Task.yield()
         }
 
-        return CatalogScan(
+        return catalogScan(
             folderURL: folderURL,
             candidateDirectoryCount: candidateDirectories.count,
             gitRepositoryCount: gitRepositories.count,
+            projects: projects
+        )
+    }
+
+    private func catalogScan(
+        folderURL: URL,
+        candidateDirectoryCount: Int,
+        gitRepositoryCount: Int,
+        projects: [ProjectScan]
+    ) -> CatalogScan {
+        CatalogScan(
+            folderURL: folderURL,
+            candidateDirectoryCount: candidateDirectoryCount,
+            gitRepositoryCount: gitRepositoryCount,
             projects: projects,
             scannedAt: Date()
         )
@@ -132,7 +168,8 @@ struct RepositoryScanner: Sendable {
         let fetchResult = try? await git.run(
             ["fetch", "--prune", "--quiet", remoteName],
             in: repositoryURL,
-            allowFailure: true
+            allowFailure: true,
+            timeout: fetchTimeout
         )
 
         let warning: String? = if let fetchResult, fetchResult.exitCode != 0 {

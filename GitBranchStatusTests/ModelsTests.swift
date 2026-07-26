@@ -37,6 +37,42 @@ final class ModelsTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testScannerPublishesAProjectAsSoonAsItIsScanned() async throws {
+        let fileManager = FileManager.default
+        let folderURL = fileManager.temporaryDirectory
+            .appendingPathComponent("GitBranchStatusUpdates-\(UUID().uuidString)")
+        let repositoryURL = folderURL.appendingPathComponent("First")
+        try fileManager.createDirectory(
+            at: repositoryURL,
+            withIntermediateDirectories: true
+        )
+        defer { try? fileManager.removeItem(at: folderURL) }
+
+        let git = GitCommandRunner()
+        _ = try await git.run(["init", "--quiet"], in: repositoryURL)
+        _ = try await git.run(
+            [
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example/first.git",
+            ],
+            in: repositoryURL
+        )
+
+        var updates: [CatalogScan] = []
+        let result = try await RepositoryScanner(fetchTimeout: .milliseconds(10)).scan(
+            folderURL: folderURL,
+            progress: { _ in },
+            update: { updates.append($0) }
+        )
+
+        XCTAssertEqual(updates.count, 1)
+        XCTAssertEqual(updates.first?.projects.map(\.name), ["First"])
+        XCTAssertEqual(result.projects.map(\.name), ["First"])
+    }
+
     func testRepositoryScanProgressDescribesCurrentAndFinishedChecks() {
         let checking = RepositoryScanProgress.checking(
             repositoryName: "GitBranchStatus",

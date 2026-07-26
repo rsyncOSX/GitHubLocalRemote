@@ -41,10 +41,20 @@ final class AppModel {
 
         scanTask = Task {
             do {
-                let result = try await scanner.scan(folderURL: folderURL) { [weak self] progress in
-                    guard !Task.isCancelled else { return }
-                    self?.scanProgress = progress
-                }
+                let result = try await scanner.scan(
+                    folderURL: folderURL,
+                    progress: { [weak self] progress in
+                        guard !Task.isCancelled else { return }
+                        self?.scanProgress = progress
+                    },
+                    update: { [weak self] partialResult in
+                        guard !Task.isCancelled else { return }
+                        self?.catalogScan = partialResult
+                        if self?.selectedProjectID == nil {
+                            self?.selectedProjectID = partialResult.projects.first?.id
+                        }
+                    }
+                )
                 guard !Task.isCancelled else { return }
 
                 catalogScan = result

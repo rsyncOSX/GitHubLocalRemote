@@ -17,7 +17,6 @@
 		A1000000000000000000000A /* WelcomeRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* WelcomeRenderingTests.swift */; };
 		A1000000000000000000000B /* GitBranchStatus.icon in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* GitBranchStatus.icon */; };
 		A1000000000000000000000C /* GitCommandRunner2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* GitCommandRunner2Tests.swift */; };
-		E90323C03016409C00714AC8 /* ProcessGit in Frameworks */ = {isa = PBXBuildFile; productRef = E90323BF3016409C00714AC8 /* ProcessGit */; };
 		E96B98E33015CCA500D845CE /* GitCommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96B98E23015CC9900D845CE /* GitCommandRunner.swift */; };
 /* End PBXBuildFile section */
 
@@ -53,7 +52,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E90323C03016409C00714AC8 /* ProcessGit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -137,7 +135,6 @@
 			);
 			name = GitBranchStatus;
 			packageProductDependencies = (
-				E90323BF3016409C00714AC8 /* ProcessGit */,
 			);
 			productName = GitBranchStatus;
 			productReference = B10000000000000000000008 /* GitBranchStatus.app */;
@@ -191,7 +188,6 @@
 			mainGroup = G10000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E90323BE3016409C00714AC8 /* XCRemoteSwiftPackageReference "ProcessGit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = G10000000000000000000005 /* Products */;
@@ -398,24 +394,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		E90323BE3016409C00714AC8 /* XCRemoteSwiftPackageReference "ProcessGit" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/rsyncOSX/ProcessGit";
-			requirement = {
-				kind = exactVersion;
-				version = 1.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		E90323BF3016409C00714AC8 /* ProcessGit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E90323BE3016409C00714AC8 /* XCRemoteSwiftPackageReference "ProcessGit" */;
-			productName = ProcessGit;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = D10000000000000000000001 /* Project object */;
 }

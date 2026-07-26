@@ -128,6 +128,45 @@ final class GitCommandRunner2Tests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testCommandsRunWithoutInteractiveCredentialPrompts() async throws {
+        let result = try await processGitRunner.run(
+            [
+                "-c",
+                "alias.environment=!printf '%s,%s' \"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\"",
+                "environment",
+            ],
+            in: repositoryURL
+        )
+
+        XCTAssertEqual(result.output, "0,Never")
+    }
+
+    @MainActor
+    func testTimeoutCancelsACommandThatDoesNotFinish() async throws {
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+
+        do {
+            _ = try await processGitRunner.run(
+                [
+                    "-c",
+                    "alias.wait=!/bin/sleep 10",
+                    "wait",
+                ],
+                in: repositoryURL,
+                timeout: .milliseconds(100)
+            )
+            XCTFail("Expected GitCommandError.timedOut")
+        } catch let GitCommandError.timedOut(arguments) {
+            XCTAssertEqual(arguments.last, "wait")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertLessThan(startedAt.duration(to: clock.now), .seconds(2))
+    }
+
     private var repositoryURL: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

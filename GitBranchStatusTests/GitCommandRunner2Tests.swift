@@ -3,14 +3,14 @@ import XCTest
 
 final class GitCommandRunner2Tests: XCTestCase {
     private let originalRunner = GitCommandRunner()
-    private let processCommandRunner = GitCommandRunner2()
+    private let processGitRunner = GitCommandRunner2()
 
     @MainActor
     func testSuccessfulCommandMatchesOriginalRunner() async throws {
         let arguments = ["rev-parse", "--show-toplevel"]
 
         let expected = try originalRunner.run(arguments, in: repositoryURL)
-        let actual = try await processCommandRunner.run(arguments, in: repositoryURL)
+        let actual = try await processGitRunner.run(arguments, in: repositoryURL)
 
         assertEqual(actual, expected)
     }
@@ -29,7 +29,7 @@ final class GitCommandRunner2Tests: XCTestCase {
         let arguments = ["rev-parse", "--show-toplevel"]
 
         let expected = try originalRunner.run(arguments, in: directory)
-        let actual = try await processCommandRunner.run(arguments, in: directory)
+        let actual = try await processGitRunner.run(arguments, in: directory)
 
         assertEqual(actual, expected)
     }
@@ -41,7 +41,7 @@ final class GitCommandRunner2Tests: XCTestCase {
             in: repositoryURL,
             allowFailure: true
         )
-        let actual = try await processCommandRunner.run(
+        let actual = try await processGitRunner.run(
             [],
             in: repositoryURL,
             allowFailure: true
@@ -63,7 +63,7 @@ final class GitCommandRunner2Tests: XCTestCase {
             in: repositoryURL,
             allowFailure: true
         )
-        let actual = try await processCommandRunner.run(
+        let actual = try await processGitRunner.run(
             arguments,
             in: repositoryURL,
             allowFailure: true
@@ -87,7 +87,7 @@ final class GitCommandRunner2Tests: XCTestCase {
             in: repositoryURL,
             allowFailure: true
         )
-        let actual = try await processCommandRunner.run(
+        let actual = try await processGitRunner.run(
             arguments,
             in: repositoryURL,
             allowFailure: true
@@ -113,7 +113,7 @@ final class GitCommandRunner2Tests: XCTestCase {
         )
 
         do {
-            _ = try await processCommandRunner.run(arguments, in: repositoryURL)
+            _ = try await processGitRunner.run(arguments, in: repositoryURL)
             XCTFail("Expected GitCommandError.commandFailed")
         } catch let GitCommandError.commandFailed(
             actualArguments,

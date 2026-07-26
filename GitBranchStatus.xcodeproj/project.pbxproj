@@ -18,8 +18,7 @@
 		A1000000000000000000000A /* WelcomeRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* WelcomeRenderingTests.swift */; };
 		A1000000000000000000000B /* GitBranchStatus.icon in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* GitBranchStatus.icon */; };
 		A1000000000000000000000C /* GitCommandRunner2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* GitCommandRunner2Tests.swift */; };
-		E9208E7C3015C35800106A25 /* ProcessCommand in Frameworks */ = {isa = PBXBuildFile; productRef = E9208E7B3015C35800106A25 /* ProcessCommand */; };
-		E9208E7E3015C3DC00106A25 /* CreateCommandHandlers.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9208E7D3015C3D100106A25 /* CreateCommandHandlers.swift */; };
+		E9208E7C3015C35800106A25 /* ProcessGit in Frameworks */ = {isa = PBXBuildFile; productRef = E9208E7B3015C35800106A25 /* ProcessGit */; };
 		E96B98E33015CCA500D845CE /* GitCommandRunner2.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96B98E23015CC9900D845CE /* GitCommandRunner2.swift */; };
 /* End PBXBuildFile section */
 
@@ -48,7 +47,6 @@
 		B1000000000000000000000C /* WelcomeRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeRenderingTests.swift; sourceTree = "<group>"; };
 		B1000000000000000000000D /* GitBranchStatus.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = GitBranchStatus.icon; sourceTree = "<group>"; };
 		B1000000000000000000000E /* GitCommandRunner2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner2Tests.swift; sourceTree = "<group>"; };
-		E9208E7D3015C3D100106A25 /* CreateCommandHandlers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateCommandHandlers.swift; sourceTree = "<group>"; };
 		E96B98E23015CC9900D845CE /* GitCommandRunner2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner2.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -57,7 +55,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E9208E7C3015C35800106A25 /* ProcessCommand in Frameworks */,
+				E9208E7C3015C35800106A25 /* ProcessGit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -87,7 +85,6 @@
 			isa = PBXGroup;
 			children = (
 				E96B98E23015CC9900D845CE /* GitCommandRunner2.swift */,
-				E9208E7D3015C3D100106A25 /* CreateCommandHandlers.swift */,
 				B10000000000000000000001 /* GitBranchStatusApp.swift */,
 				B10000000000000000000002 /* ContentView.swift */,
 				B10000000000000000000003 /* AppModel.swift */,
@@ -143,7 +140,7 @@
 			);
 			name = GitBranchStatus;
 			packageProductDependencies = (
-				E9208E7B3015C35800106A25 /* ProcessCommand */,
+				E9208E7B3015C35800106A25 /* ProcessGit */,
 			);
 			productName = GitBranchStatus;
 			productReference = B10000000000000000000008 /* GitBranchStatus.app */;
@@ -197,7 +194,7 @@
 			mainGroup = G10000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E9208E7A3015C35800106A25 /* XCRemoteSwiftPackageReference "ProcessCommand" */,
+				E9208E7A3015C35800106A25 /* XCLocalSwiftPackageReference "../ProcessGit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = G10000000000000000000005 /* Products */;
@@ -233,7 +230,6 @@
 				A10000000000000000000004 /* Models.swift in Sources */,
 				A10000000000000000000005 /* GitCommandRunner.swift in Sources */,
 				A10000000000000000000006 /* RepositoryScanner.swift in Sources */,
-				E9208E7E3015C3DC00106A25 /* CreateCommandHandlers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -406,22 +402,18 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		E9208E7A3015C35800106A25 /* XCRemoteSwiftPackageReference "ProcessCommand" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/rsyncOSX/ProcessCommand";
-			requirement = {
-				kind = exactVersion;
-				version = 1.0.0;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		E9208E7A3015C35800106A25 /* XCLocalSwiftPackageReference "../ProcessGit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../ProcessGit;
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		E9208E7B3015C35800106A25 /* ProcessCommand */ = {
+		E9208E7B3015C35800106A25 /* ProcessGit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E9208E7A3015C35800106A25 /* XCRemoteSwiftPackageReference "ProcessCommand" */;
-			productName = ProcessCommand;
+			package = E9208E7A3015C35800106A25 /* XCLocalSwiftPackageReference "../ProcessGit" */;
+			productName = ProcessGit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

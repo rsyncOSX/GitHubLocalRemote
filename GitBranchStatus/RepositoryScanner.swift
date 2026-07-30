@@ -44,22 +44,41 @@ struct RepositoryScanner: Sendable {
         await progress(.discoveringRepositories)
 
         let fileManager = FileManager.default
-        guard let children = try? fileManager.contentsOfDirectory(
+        guard (try? fileManager.contentsOfDirectory(
             at: folderURL,
             includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],
             options: [.skipsHiddenFiles]
+        )) != nil else {
+            throw RepositoryScannerError.cannotReadFolder(folderURL.path)
+        }
+
+        guard let descendants = fileManager.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, _ in true }
         ) else {
             throw RepositoryScannerError.cannotReadFolder(folderURL.path)
         }
 
-        let candidateDirectories = children
-            .filter { url in
-                guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isHiddenKey]) else {
-                    return false
-                }
-                return values.isDirectory == true && values.isHidden != true
+        var candidateDirectories: [URL] = []
+        while let descendant = descendants.nextObject() as? URL {
+            try Task.checkCancellation()
+
+            guard let values = try? descendant.resourceValues(
+                forKeys: [.isDirectoryKey, .isHiddenKey, .isSymbolicLinkKey]
+            ), values.isDirectory == true,
+                values.isHidden != true,
+                values.isSymbolicLink != true
+            else {
+                continue
             }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+
+            candidateDirectories.append(descendant)
+        }
+        candidateDirectories.sort {
+            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
 
         let gitRepositories = candidateDirectories.filter { directory in
             var isDirectory: ObjCBool = false

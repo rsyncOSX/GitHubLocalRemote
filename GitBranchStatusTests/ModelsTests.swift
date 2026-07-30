@@ -73,6 +73,50 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(result.projects.map(\.name), ["First"])
     }
 
+    @MainActor
+    func testScannerFindsRepositoriesInAllVisibleSubdirectories() async throws {
+        let fileManager = FileManager.default
+        let folderURL = fileManager.temporaryDirectory
+            .appendingPathComponent("GitBranchStatusRecursive-\(UUID().uuidString)")
+        let topLevelRepositoryURL = folderURL.appendingPathComponent("TopLevel")
+        let nestedRepositoryURL = folderURL
+            .appendingPathComponent("Group")
+            .appendingPathComponent("Nested")
+        let hiddenRepositoryURL = folderURL
+            .appendingPathComponent(".Hidden")
+            .appendingPathComponent("Ignored")
+
+        for repositoryURL in [
+            topLevelRepositoryURL,
+            nestedRepositoryURL,
+            hiddenRepositoryURL,
+        ] {
+            try fileManager.createDirectory(
+                at: repositoryURL.appendingPathComponent(".git"),
+                withIntermediateDirectories: true
+            )
+        }
+        defer { try? fileManager.removeItem(at: folderURL) }
+
+        var receivedProgress: [RepositoryScanProgress] = []
+        let result = try await RepositoryScanner().scan(folderURL: folderURL) { progress in
+            receivedProgress.append(progress)
+        }
+
+        XCTAssertEqual(result.candidateDirectoryCount, 3)
+        XCTAssertEqual(result.gitRepositoryCount, 2)
+        XCTAssertEqual(
+            receivedProgress,
+            [
+                .discoveringRepositories,
+                .checking(repositoryName: "Nested", number: 1, total: 2),
+                .finished(repositoryName: "Nested", number: 1, total: 2),
+                .checking(repositoryName: "TopLevel", number: 2, total: 2),
+                .finished(repositoryName: "TopLevel", number: 2, total: 2),
+            ]
+        )
+    }
+
     func testRepositoryScanProgressDescribesCurrentAndFinishedChecks() {
         let checking = RepositoryScanProgress.checking(
             repositoryName: "GitBranchStatus",

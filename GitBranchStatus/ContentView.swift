@@ -309,6 +309,14 @@ private struct ProjectHeader: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(project.name)
                         .font(.title.bold())
+                    Label(project.directoryURL.path, systemImage: "folder")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(project.directoryURL.path)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Local repository path: \(project.directoryURL.path)")
                     Link(destination: project.remoteWebURL) {
                         Label(
                             "\(project.remoteWebURL.path.dropFirst()) · \(project.remoteName)",

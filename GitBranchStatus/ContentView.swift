@@ -207,7 +207,9 @@ private struct ProjectSidebar: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("\(scan.projects.count) GitHub project\(scan.projects.count == 1 ? "" : "s")")
                         .font(.caption.weight(.semibold))
-                    Text("\(scan.gitRepositoryCount) Git repos in \(scan.candidateDirectoryCount) folders")
+                    Text(
+                        "Found \(scan.githubRepositoryCount) GitHub repos among \(scan.gitRepositoryCount) Git repos in \(scan.candidateDirectoryCount) folders"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text(scan.folderURL.path)
@@ -516,7 +518,7 @@ private struct NoProjectsView: View {
             Label("No GitHub Projects Found", systemImage: "questionmark.folder")
         } description: {
             Text(
-                "Checked \(scan.candidateDirectoryCount) folders. A project must contain a .git folder and a remote hosted on github.com."
+                "Found \(scan.gitRepositoryCount) Git repositories in \(scan.candidateDirectoryCount) folders, but none has a remote hosted on github.com."
             )
         }
     }

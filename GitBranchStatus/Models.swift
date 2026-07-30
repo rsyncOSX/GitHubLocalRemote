@@ -8,6 +8,11 @@ enum ScanPhase: Equatable {
 
 enum RepositoryScanProgress: Equatable, Sendable {
     case discoveringRepositories
+    case foundRepositories(
+        githubRepositoryCount: Int,
+        gitRepositoryCount: Int,
+        candidateDirectoryCount: Int
+    )
     case checking(repositoryName: String, number: Int, total: Int)
     case finished(repositoryName: String, number: Int, total: Int)
 
@@ -15,6 +20,8 @@ enum RepositoryScanProgress: Equatable, Sendable {
         switch self {
         case .discoveringRepositories:
             "Finding Git repositories…"
+        case let .foundRepositories(githubCount, gitCount, directoryCount):
+            "Found \(githubCount) GitHub \(Self.repositoryLabel(for: githubCount)) among \(gitCount) Git \(Self.repositoryLabel(for: gitCount)) in \(directoryCount) \(Self.folderLabel(for: directoryCount))."
         case let .checking(repositoryName, number, total):
             "Checking \(repositoryName) (\(number) of \(total))…"
         case let .finished(repositoryName, number, total):
@@ -27,6 +34,14 @@ enum RepositoryScanProgress: Equatable, Sendable {
             return true
         }
         return false
+    }
+
+    private static func repositoryLabel(for count: Int) -> String {
+        count == 1 ? "repository" : "repositories"
+    }
+
+    private static func folderLabel(for count: Int) -> String {
+        count == 1 ? "folder" : "folders"
     }
 }
 
@@ -145,6 +160,7 @@ struct CatalogScan: Equatable, Sendable {
     let folderURL: URL
     let candidateDirectoryCount: Int
     let gitRepositoryCount: Int
+    let githubRepositoryCount: Int
     let projects: [ProjectScan]
     let scannedAt: Date
 }

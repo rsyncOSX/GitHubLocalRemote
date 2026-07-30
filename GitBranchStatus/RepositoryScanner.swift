@@ -15,6 +15,12 @@ enum RepositoryScannerError: LocalizedError, Sendable {
 }
 
 struct RepositoryScanner: Sendable {
+    private struct QualifiedRepository {
+        let url: URL
+        let remoteName: String
+        let remote: GitHubRemote
+    }
+
     private let git = GitCommandRunner()
     private let fetchTimeout: Duration
 
@@ -86,41 +92,65 @@ struct RepositoryScanner: Sendable {
             return fileManager.fileExists(atPath: gitPath, isDirectory: &isDirectory) && isDirectory.boolValue
         }
 
+        var qualifiedRepositories: [QualifiedRepository] = []
+        for repositoryURL in gitRepositories {
+            try Task.checkCancellation()
+
+            guard let remote = await githubRemote(in: repositoryURL) else {
+                continue
+            }
+            qualifiedRepositories.append(
+                QualifiedRepository(
+                    url: repositoryURL,
+                    remoteName: remote.name,
+                    remote: remote.remote
+                )
+            )
+        }
+
+        await progress(
+            .foundRepositories(
+                githubRepositoryCount: qualifiedRepositories.count,
+                gitRepositoryCount: gitRepositories.count,
+                candidateDirectoryCount: candidateDirectories.count
+            )
+        )
+        await Task.yield()
+
         var projects: [ProjectScan] = []
-        for (offset, repositoryURL) in gitRepositories.enumerated() {
+        for (offset, repository) in qualifiedRepositories.enumerated() {
             try Task.checkCancellation()
 
             let repositoryNumber = offset + 1
             await progress(
                 .checking(
-                    repositoryName: repositoryURL.lastPathComponent,
+                    repositoryName: repository.url.lastPathComponent,
                     number: repositoryNumber,
-                    total: gitRepositories.count
+                    total: qualifiedRepositories.count
                 )
             )
 
-            if let remote = await githubRemote(in: repositoryURL) {
-                let project = await scanRepository(
-                    at: repositoryURL,
-                    remoteName: remote.name,
-                    remote: remote.remote
+            let project = await scanRepository(
+                at: repository.url,
+                remoteName: repository.remoteName,
+                remote: repository.remote
+            )
+            projects.append(project)
+            await update(
+                catalogScan(
+                    folderURL: folderURL,
+                    candidateDirectoryCount: candidateDirectories.count,
+                    gitRepositoryCount: gitRepositories.count,
+                    githubRepositoryCount: qualifiedRepositories.count,
+                    projects: projects
                 )
-                projects.append(project)
-                await update(
-                    catalogScan(
-                        folderURL: folderURL,
-                        candidateDirectoryCount: candidateDirectories.count,
-                        gitRepositoryCount: gitRepositories.count,
-                        projects: projects
-                    )
-                )
-            }
+            )
 
             await progress(
                 .finished(
-                    repositoryName: repositoryURL.lastPathComponent,
+                    repositoryName: repository.url.lastPathComponent,
                     number: repositoryNumber,
-                    total: gitRepositories.count
+                    total: qualifiedRepositories.count
                 )
             )
             await Task.yield()
@@ -130,6 +160,7 @@ struct RepositoryScanner: Sendable {
             folderURL: folderURL,
             candidateDirectoryCount: candidateDirectories.count,
             gitRepositoryCount: gitRepositories.count,
+            githubRepositoryCount: qualifiedRepositories.count,
             projects: projects
         )
     }
@@ -138,12 +169,14 @@ struct RepositoryScanner: Sendable {
         folderURL: URL,
         candidateDirectoryCount: Int,
         gitRepositoryCount: Int,
+        githubRepositoryCount: Int,
         projects: [ProjectScan]
     ) -> CatalogScan {
         CatalogScan(
             folderURL: folderURL,
             candidateDirectoryCount: candidateDirectoryCount,
             gitRepositoryCount: gitRepositoryCount,
+            githubRepositoryCount: githubRepositoryCount,
             projects: projects,
             scannedAt: Date()
         )

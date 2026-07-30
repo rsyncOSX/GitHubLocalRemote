@@ -17,7 +17,8 @@ remote-ahead and clearly labeled as local-only or remote-only.
 
 1. Choose a folder containing project folders.
 2. The app recursively checks every visible subfolder for a `.git` directory.
-3. It keeps repositories with a `github.com` remote, preferring `origin`.
+3. Before scanning, it qualifies repositories with a `github.com` remote,
+   preferring `origin`, and reports how many it found.
 4. It runs `git fetch --prune` for that remote.
 5. It compares local and remote branch commit graphs with
    `git rev-list --left-right --count`.

@@ -50,6 +50,7 @@ enum BranchSyncStatus: String, CaseIterable, Sendable {
     case inSync
     case remoteAhead
     case diverged
+    case unknown
 
     var title: String {
         switch self {
@@ -57,6 +58,7 @@ enum BranchSyncStatus: String, CaseIterable, Sendable {
         case .inSync: "In sync"
         case .remoteAhead: "Remote ahead"
         case .diverged: "Diverged"
+        case .unknown: "Unknown"
         }
     }
 }
@@ -68,6 +70,7 @@ enum BranchFilter: String, CaseIterable, Identifiable {
     case inSync
     case remoteAhead
     case diverged
+    case unknown
 
     var id: Self {
         self
@@ -81,6 +84,7 @@ enum BranchFilter: String, CaseIterable, Identifiable {
         case .inSync: "In sync"
         case .remoteAhead: "Remote ahead"
         case .diverged: "Diverged"
+        case .unknown: "Could not compare"
         }
     }
 
@@ -98,6 +102,8 @@ enum BranchFilter: String, CaseIterable, Identifiable {
             branch.status == .remoteAhead
         case .diverged:
             branch.status == .diverged
+        case .unknown:
+            branch.status == .unknown
         }
     }
 }
@@ -133,6 +139,8 @@ struct BranchRecord: Identifiable, Equatable, Sendable {
             "Same commit"
         case (_, _, .diverged):
             "\(aheadCount ?? 0) ahead, \(behindCount ?? 0) behind"
+        case (_, _, .unknown):
+            "Could not compare commits"
         }
     }
 }
@@ -192,12 +200,17 @@ struct GitHubRemote: Equatable, Sendable {
 
         // Git commonly stores SSH remotes in SCP-style form:
         // git@github.com:owner/repository.git
-        let lowercased = raw.lowercased()
-        guard let markerRange = lowercased.range(of: "github.com:") else {
+        guard let separatorIndex = raw.firstIndex(of: ":") else {
             return nil
         }
 
-        let path = String(raw[markerRange.upperBound...])
+        let host = raw[..<separatorIndex]
+            .split(separator: "@", maxSplits: 1)
+            .last?
+            .lowercased()
+        guard host == "github.com" else { return nil }
+
+        let path = String(raw[raw.index(after: separatorIndex)...])
         return remote(fromPath: path, rawValue: raw)
     }
 

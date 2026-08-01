@@ -96,7 +96,7 @@ struct RepositoryScanner: Sendable {
         for repositoryURL in gitRepositories {
             try Task.checkCancellation()
 
-            guard let remote = await githubRemote(in: repositoryURL) else {
+            guard let remote = try await githubRemote(in: repositoryURL) else {
                 continue
             }
             qualifiedRepositories.append(
@@ -130,7 +130,7 @@ struct RepositoryScanner: Sendable {
                 )
             )
 
-            let project = await scanRepository(
+            let project = try await scanRepository(
                 at: repository.url,
                 remoteName: repository.remoteName,
                 remote: repository.remote
@@ -182,8 +182,13 @@ struct RepositoryScanner: Sendable {
         )
     }
 
-    private func githubRemote(in repositoryURL: URL) async -> (name: String, remote: GitHubRemote)? {
-        guard let namesOutput = try? await git.run(["remote"], in: repositoryURL).output else {
+    private func githubRemote(in repositoryURL: URL) async throws -> (name: String, remote: GitHubRemote)? {
+        let namesOutput: String
+        do {
+            namesOutput = try await git.run(["remote"], in: repositoryURL).output
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
             return nil
         }
 
@@ -201,13 +206,17 @@ struct RepositoryScanner: Sendable {
             }
 
         for name in names {
-            guard let remoteURL = try? await git.run(["remote", "get-url", name], in: repositoryURL).output,
-                  let githubRemote = GitHubRemote.parse(remoteURL)
-            else {
-                continue
+                let remoteURL: String
+                do {
+                    remoteURL = try await git.run(["remote", "get-url", name], in: repositoryURL).output
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    continue
+                }
+                guard let githubRemote = GitHubRemote.parse(remoteURL) else { continue }
+                return (name, githubRemote)
             }
-            return (name, githubRemote)
-        }
 
         return nil
     }
@@ -216,13 +225,20 @@ struct RepositoryScanner: Sendable {
         at repositoryURL: URL,
         remoteName: String,
         remote: GitHubRemote
-    ) async -> ProjectScan {
-        let fetchResult = try? await git.run(
-            ["fetch", "--prune", "--quiet", remoteName],
-            in: repositoryURL,
-            allowFailure: true,
-            timeout: fetchTimeout
-        )
+    ) async throws -> ProjectScan {
+        let fetchResult: GitCommandResult?
+        do {
+            fetchResult = try await git.run(
+                ["fetch", "--prune", "--quiet", remoteName],
+                in: repositoryURL,
+                allowFailure: true,
+                timeout: fetchTimeout
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            fetchResult = nil
+        }
 
         let warning: String? = if let fetchResult, fetchResult.exitCode != 0 {
             fetchResult.errorOutput.isEmpty
@@ -255,14 +271,18 @@ struct RepositoryScanner: Sendable {
                 .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 
             var branches: [BranchRecord] = []
+            var comparisonWarnings: [String] = []
             for branchName in branchNames {
-                let branch = await compare(
+                let comparison = try await compare(
                     branchName: branchName,
                     localOID: localReferences[branchName],
                     remoteOID: remoteReferences[branchName],
                     repositoryURL: repositoryURL
                 )
-                branches.append(branch)
+                branches.append(comparison.branch)
+                if let warning = comparison.warning {
+                    comparisonWarnings.append(warning)
+                }
             }
 
             return ProjectScan(
@@ -273,8 +293,14 @@ struct RepositoryScanner: Sendable {
                 remoteWebURL: remote.webURL,
                 branches: branches,
                 fetchedAt: Date(),
-                warning: warning
+                warning: [warning, comparisonWarnings.isEmpty
+                    ? nil
+                    : comparisonWarnings.joined(separator: "\n")]
+                    .compactMap(\.self)
+                    .joined(separator: "\n")
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             let combinedWarning = [warning, error.localizedDescription]
                 .compactMap(\.self)
@@ -322,40 +348,70 @@ struct RepositoryScanner: Sendable {
         localOID: String?,
         remoteOID: String?,
         repositoryURL: URL
-    ) async -> BranchRecord {
+    ) async throws -> (branch: BranchRecord, warning: String?) {
         let id = "\(repositoryURL.standardizedFileURL.path)#\(branchName)"
 
         switch (localOID, remoteOID) {
         case let (.some(local), .some(remote)):
-            let counts = await divergenceCounts(localOID: local, remoteOID: remote, repositoryURL: repositoryURL)
-            return BranchRecord(
-                id: id,
-                name: branchName,
-                status: BranchComparison.classify(ahead: counts.ahead, behind: counts.behind),
-                localOID: local,
-                remoteOID: remote,
-                aheadCount: counts.ahead,
-                behindCount: counts.behind
-            )
+            do {
+                let counts = try await divergenceCounts(
+                    localOID: local,
+                    remoteOID: remote,
+                    repositoryURL: repositoryURL
+                )
+                return (
+                    BranchRecord(
+                        id: id,
+                        name: branchName,
+                        status: BranchComparison.classify(ahead: counts.ahead, behind: counts.behind),
+                        localOID: local,
+                        remoteOID: remote,
+                        aheadCount: counts.ahead,
+                        behindCount: counts.behind
+                    ),
+                    nil
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                return (
+                    BranchRecord(
+                        id: id,
+                        name: branchName,
+                        status: .unknown,
+                        localOID: local,
+                        remoteOID: remote,
+                        aheadCount: nil,
+                        behindCount: nil
+                    ),
+                    "Could not compare \(branchName): \(error.localizedDescription)"
+                )
+            }
         case let (.some(local), nil):
-            return BranchRecord(
-                id: id,
-                name: branchName,
-                status: .localAhead,
-                localOID: local,
-                remoteOID: nil,
-                aheadCount: nil,
-                behindCount: nil
+            return (
+                BranchRecord(
+                    id: id,
+                    name: branchName,
+                    status: .localAhead,
+                    localOID: local,
+                    remoteOID: nil,
+                    aheadCount: nil,
+                    behindCount: nil
+                ),
+                nil
             )
         case let (nil, .some(remote)):
-            return BranchRecord(
-                id: id,
-                name: branchName,
-                status: .remoteAhead,
-                localOID: nil,
-                remoteOID: remote,
-                aheadCount: nil,
-                behindCount: nil
+            return (
+                BranchRecord(
+                    id: id,
+                    name: branchName,
+                    status: .remoteAhead,
+                    localOID: nil,
+                    remoteOID: remote,
+                    aheadCount: nil,
+                    behindCount: nil
+                ),
+                nil
             )
         case (nil, nil):
             preconditionFailure("A branch must exist locally, remotely, or both")
@@ -366,20 +422,18 @@ struct RepositoryScanner: Sendable {
         localOID: String,
         remoteOID: String,
         repositoryURL: URL
-    ) async -> (ahead: Int, behind: Int) {
-        guard let output = try? await git.run(
+    ) async throws -> (ahead: Int, behind: Int) {
+        let output = try await git.run(
             ["rev-list", "--left-right", "--count", "\(localOID)...\(remoteOID)"],
             in: repositoryURL
-        ).output else {
-            return (0, 0)
-        }
+        ).output
 
         let fields = output.split(whereSeparator: \.isWhitespace)
         guard fields.count == 2,
               let ahead = Int(fields[0]),
               let behind = Int(fields[1])
         else {
-            return (0, 0)
+            throw RepositoryScannerError.malformedReferenceOutput(output)
         }
         return (ahead, behind)
     }

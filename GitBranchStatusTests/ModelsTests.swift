@@ -77,6 +77,56 @@ final class ModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testScannerMarksUncomparableBranchesAsUnknown() async throws {
+        let fileManager = FileManager.default
+        let folderURL = fileManager.temporaryDirectory
+            .appendingPathComponent("GitBranchStatusUncomparable-\(UUID().uuidString)")
+        let repositoryURL = folderURL.appendingPathComponent("First")
+        try fileManager.createDirectory(
+            at: repositoryURL,
+            withIntermediateDirectories: true
+        )
+        defer { try? fileManager.removeItem(at: folderURL) }
+
+        let git = GitCommandRunner()
+        _ = try await git.run(["init", "--quiet"], in: repositoryURL)
+        _ = try await git.run(["config", "user.email", "tests@example.com"], in: repositoryURL)
+        _ = try await git.run(["config", "user.name", "Tests"], in: repositoryURL)
+        _ = try await git.run(
+            ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "--quiet", "-m", "Initial"],
+            in: repositoryURL
+        )
+        _ = try await git.run(
+            ["remote", "add", "origin", "https://github.com/example/first.git"],
+            in: repositoryURL
+        )
+
+        let branchName = try await git.run(
+            ["symbolic-ref", "--short", "HEAD"],
+            in: repositoryURL
+        ).output
+        let treeOID = try await git.run(["write-tree"], in: repositoryURL).output
+        _ = try await git.run(
+            [
+                "update-ref",
+                "refs/remotes/origin/\(branchName)",
+                treeOID,
+            ],
+            in: repositoryURL
+        )
+
+        let result = try await RepositoryScanner(fetchTimeout: .milliseconds(10)).scan(
+            folderURL: folderURL,
+            progress: { _ in }
+        )
+
+        let project = try XCTUnwrap(result.projects.first)
+        XCTAssertEqual(project.branches.first?.status, .unknown)
+        XCTAssertNotNil(project.warning)
+        XCTAssertNotEqual(project.branches.first?.status, .inSync)
+    }
+
+    @MainActor
     func testScannerFindsRepositoriesInAllVisibleSubdirectories() async throws {
         let fileManager = FileManager.default
         let folderURL = fileManager.temporaryDirectory
@@ -171,6 +221,22 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(BranchComparison.classify(ahead: 4, behind: 1), .diverged)
     }
 
+    func testUnknownBranchIsNotShownAsInSync() {
+        let branch = BranchRecord(
+            id: "unknown",
+            name: "main",
+            status: .unknown,
+            localOID: "1234567890abcdef",
+            remoteOID: "fedcba0987654321",
+            aheadCount: nil,
+            behindCount: nil
+        )
+
+        XCTAssertEqual(branch.statusDetail, "Could not compare commits")
+        XCTAssertTrue(BranchFilter.attention.includes(branch))
+        XCTAssertFalse(BranchFilter.inSync.includes(branch))
+    }
+
     func testParsesHTTPSGitHubRemote() {
         let remote = GitHubRemote.parse("https://github.com/openai/codex.git")
 
@@ -188,6 +254,7 @@ final class ModelsTests: XCTestCase {
 
     func testRejectsNonGitHubAndMalformedRemote() {
         XCTAssertNil(GitHubRemote.parse("https://gitlab.com/openai/codex.git"))
+        XCTAssertNil(GitHubRemote.parse("git@notgithub.com:openai/codex.git"))
         XCTAssertNil(GitHubRemote.parse("https://github.com/owner"))
         XCTAssertNil(GitHubRemote.parse(""))
     }

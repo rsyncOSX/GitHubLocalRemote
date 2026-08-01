@@ -361,6 +361,12 @@ private struct ProjectHeader: View {
                     systemImage: "arrow.triangle.branch",
                     color: .red
                 )
+                SummaryCard(
+                    title: "Unknown",
+                    count: project.count(for: .unknown),
+                    systemImage: "questionmark.circle.fill",
+                    color: .gray
+                )
             }
         }
         .padding(20)
@@ -467,6 +473,7 @@ private struct BranchStatusLabel: View {
         case .inSync: .green
         case .remoteAhead: .orange
         case .diverged: .red
+        case .unknown: .gray
         }
     }
 
@@ -476,6 +483,7 @@ private struct BranchStatusLabel: View {
         case .inSync: "checkmark.circle.fill"
         case .remoteAhead: "arrow.down.circle.fill"
         case .diverged: "arrow.triangle.branch"
+        case .unknown: "questionmark.circle.fill"
         }
     }
 

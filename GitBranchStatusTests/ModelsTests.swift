@@ -3,6 +3,34 @@ import XCTest
 
 final class ModelsTests: XCTestCase {
     @MainActor
+    func testScannerHonorsCallerCancellation() async throws {
+        let folderURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitBranchStatusCancellation-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: folderURL.appendingPathComponent("Child"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: folderURL) }
+
+        let task = Task {
+            try await RepositoryScanner().scan(
+                folderURL: folderURL,
+                progress: { _ in }
+            )
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected the scan to be cancelled")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    @MainActor
     func testScannerFinishesEachRepositoryBeforeCheckingTheNext() async throws {
         let fileManager = FileManager.default
         let folderURL = fileManager.temporaryDirectory
@@ -235,6 +263,31 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(branch.statusDetail, "Could not compare commits")
         XCTAssertTrue(BranchFilter.attention.includes(branch))
         XCTAssertFalse(BranchFilter.inSync.includes(branch))
+    }
+
+    func testEmptyWarningsAreNotPresentedAsRepositoryProblems() {
+        XCTAssertNil(RepositoryWarnings.combine([]))
+        XCTAssertNil(RepositoryWarnings.combine([nil, "", "  \n  "]))
+
+        let project = ProjectScan(
+            id: "project",
+            name: "Project",
+            directoryURL: URL(fileURLWithPath: "/tmp/Project"),
+            remoteName: "origin",
+            remoteWebURL: URL(string: "https://github.com/example/project")!,
+            branches: [],
+            fetchedAt: Date(),
+            warning: "\n"
+        )
+
+        XCTAssertNil(project.warningMessage)
+    }
+
+    func testRepositoryWarningsAreTrimmedAndCombined() {
+        XCTAssertEqual(
+            RepositoryWarnings.combine(["  Fetch failed.  ", nil, "Compare failed.\n"]),
+            "Fetch failed.\nCompare failed."
+        )
     }
 
     func testParsesHTTPSGitHubRemote() {

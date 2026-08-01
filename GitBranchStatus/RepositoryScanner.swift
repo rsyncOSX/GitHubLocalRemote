@@ -14,6 +14,17 @@ enum RepositoryScannerError: LocalizedError, Sendable {
     }
 }
 
+enum RepositoryWarnings {
+    static func combine(_ warnings: [String?]) -> String? {
+        let messages = warnings.compactMap { warning -> String? in
+            guard let warning else { return nil }
+            let message = warning.trimmingCharacters(in: .whitespacesAndNewlines)
+            return message.isEmpty ? nil : message
+        }
+        return messages.isEmpty ? nil : messages.joined(separator: "\n")
+    }
+}
+
 struct RepositoryScanner: Sendable {
     private struct QualifiedRepository {
         let url: URL
@@ -33,13 +44,11 @@ struct RepositoryScanner: Sendable {
         progress: @escaping @MainActor @Sendable (RepositoryScanProgress) -> Void,
         update: @escaping @MainActor @Sendable (CatalogScan) -> Void = { _ in }
     ) async throws -> CatalogScan {
-        try await Task.detached(priority: .userInitiated) {
-            try await scanSynchronously(
-                folderURL: folderURL,
-                progress: progress,
-                update: update
-            )
-        }.value
+        try await scanSynchronously(
+            folderURL: folderURL,
+            progress: progress,
+            update: update
+        )
     }
 
     private func scanSynchronously(
@@ -293,18 +302,20 @@ struct RepositoryScanner: Sendable {
                 remoteWebURL: remote.webURL,
                 branches: branches,
                 fetchedAt: Date(),
-                warning: [warning, comparisonWarnings.isEmpty
-                    ? nil
-                    : comparisonWarnings.joined(separator: "\n")]
-                    .compactMap(\.self)
-                    .joined(separator: "\n")
+                warning: RepositoryWarnings.combine([
+                    warning,
+                    comparisonWarnings.isEmpty
+                        ? nil
+                        : comparisonWarnings.joined(separator: "\n"),
+                ])
             )
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            let combinedWarning = [warning, error.localizedDescription]
-                .compactMap(\.self)
-                .joined(separator: "\n")
+            let combinedWarning = RepositoryWarnings.combine([
+                warning,
+                error.localizedDescription,
+            ])
 
             return ProjectScan(
                 id: repositoryURL.standardizedFileURL.path,

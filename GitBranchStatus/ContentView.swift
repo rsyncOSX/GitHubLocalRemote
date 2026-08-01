@@ -232,11 +232,11 @@ private struct ProjectSidebarRow: View {
     let project: ProjectScan
 
     private var isHealthy: Bool {
-        project.warning == nil && !project.branches.isEmpty && project.attentionCount == 0
+        project.warningMessage == nil && !project.branches.isEmpty && project.attentionCount == 0
     }
 
     private var summary: String {
-        if project.warning != nil, project.branches.isEmpty {
+        if project.warningMessage != nil, project.branches.isEmpty {
             return "Could not read branches"
         }
         if project.branches.isEmpty {
@@ -283,7 +283,7 @@ private struct ProjectDetailView: View {
         VStack(spacing: 0) {
             ProjectHeader(project: project, filter: $filter)
 
-            if let warning = project.warning {
+            if let warning = project.warningMessage {
                 WarningBanner(message: warning)
             }
 

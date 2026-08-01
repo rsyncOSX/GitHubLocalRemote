@@ -155,6 +155,15 @@ struct ProjectScan: Identifiable, Equatable, Sendable {
     let fetchedAt: Date
     let warning: String?
 
+    /// A normalized warning suitable for presentation. Keeping this check at
+    /// the model boundary prevents an empty diagnostic from being rendered as
+    /// an orange warning banner or unhealthy sidebar status.
+    var warningMessage: String? {
+        guard let warning else { return nil }
+        let message = warning.trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? nil : message
+    }
+
     func count(for status: BranchSyncStatus) -> Int {
         branches.count { $0.status == status }
     }

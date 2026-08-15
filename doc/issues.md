@@ -21,25 +21,25 @@ The current implementation:
 - closes the parent copies of the pipe writers so readers receive EOF;
 - supports cancellation and command timeouts;
 - prevents terminal, credential-manager, and SSH authentication prompts;
-- limits a repository fetch to 15 seconds and falls back to cached references;
+- limits a repository fetch to 45 seconds and falls back to cached references;
 - publishes each GitHub project as soon as that repository has been scanned;
-- no longer depends on the ProcessGit package that introduced the observed
-  scan stall.
+- uses the local ProcessGit 1.1.0 package for hardened process execution.
 
-The full test suite currently passes: 28 tests with no failures.
+The GitBranchStatus suite currently passes 29 tests with no failures. The local
+ProcessGit 1.1.0 package adds 10 passing package-level contract tests.
 
 ## Failure analysis
 
-The reported scan stopped after the first repository because the ProcessGit
-execution path could remain suspended after the Git child had already exited.
-The application therefore waited for a process result that would never arrive,
-leaving the progress display at the current repository and withholding the
-catalog result.
+The original ProcessGit 1.0.0 execution path was implicated when the reported
+scan stopped after the first repository, but the package itself was not isolated
+as the sole cause. The application waited for a process result that never
+arrived, leaving the progress display at the current repository and withholding
+the catalog result.
 
-The current runner avoids that failure mode by explicitly managing pipe
-ownership and using a termination event registered before process launch.
-Repeated sequential Git commands, timeout cancellation, and incremental scan
-updates are covered by tests.
+ProcessGit 1.1.0 avoids that failure mode by explicitly managing pipe ownership,
+waiting for the spawned process directly, and terminating the complete process
+group on timeout or cancellation. Repeated sequential commands, timeout
+cancellation, and incremental scan updates are covered by package and app tests.
 
 Compared with `main`, the current implementation also addresses two independent
 ways a scan could appear frozen:
@@ -74,10 +74,10 @@ timeout reporting, and cached-reference fallback.
 
 ### P2 — Cancellation terminates only the direct Git process — resolved
 
-Git is launched in a dedicated POSIX process group. Timeout and user
-cancellation send `SIGTERM` to the group, then escalate to `SIGKILL` after a
-short grace period if any group member remains. Readers stay active until every
-group member closes its inherited output descriptors.
+ProcessGit 1.1.0 launches each command in a dedicated POSIX process group.
+Timeout and user cancellation send `SIGTERM` to the group, then escalate to
+`SIGKILL` after a short grace period if any group member remains. Readers stay
+active until every group member closes its inherited output descriptors.
 
 Coverage uses a command that spawns a child, ignores `SIGTERM` in the parent,
 and verifies that timeout and user cancellation leave neither process running.
@@ -103,5 +103,5 @@ replaced. Fetch must remain noninteractive.
 
 All P1 and P2 items recorded by this review are resolved on `version-1.0.3`.
 The scanner now has structured cancellation, stale-update isolation, bounded
-fetches, process-tree termination, and contract-based runner tests. The P3 SSH
-environment-policy item remains open.
+fetches, ProcessGit 1.1.0 process-tree termination, and contract-based runner
+tests. The P3 SSH environment-policy item remains open.

@@ -16,6 +16,7 @@ CREATE_DMG ?= ../RawCull/create-dmg/create-dmg
 TEST_DESTINATION := platform=macOS
 XCODE_TEST_FLAGS := -project $(PROJECT) -scheme $(SCHEME) -destination '$(TEST_DESTINATION)'
 XCODE_RELEASE_FLAGS := -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=macOS,arch=arm64' -configuration Release
+XCODE_ARCH_FLAGS := ARCHS=arm64 ONLY_ACTIVE_ARCH=NO EXCLUDED_ARCHS=x86_64
 
 .DEFAULT_GOAL := build
 
@@ -38,7 +39,8 @@ archive: clean
 	@echo "Exporting application archive (RELEASE)..."
 	xcodebuild \
 		$(XCODE_RELEASE_FLAGS) archive \
-		-archivePath "$(ARCHIVE_PATH)"
+		-archivePath "$(ARCHIVE_PATH)" \
+		$(XCODE_ARCH_FLAGS)
 	@echo "Application built, starting archive export..."
 	xcodebuild -exportArchive \
 		-exportOptionsPlist "exportOptions.plist" \
@@ -56,7 +58,8 @@ archive-debug: clean
 		-scheme "$(SCHEME)" \
 		-destination 'platform=macOS,arch=arm64' \
 		-configuration Debug archive \
-		-archivePath "$(ARCHIVE_PATH)"
+		-archivePath "$(ARCHIVE_PATH)" \
+		$(XCODE_ARCH_FLAGS)
 	@echo "Application built, starting archive export..."
 	xcodebuild -exportArchive \
 		-exportOptionsPlist "exportOptionsDebug.plist" \

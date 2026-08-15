@@ -1,4 +1,5 @@
 @testable import GitBranchStatus
+import Darwin
 import XCTest
 
 final class ModelsTests: XCTestCase {
@@ -28,6 +29,137 @@ final class ModelsTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+    }
+
+    @MainActor
+    func testStartingScanBCancelsActiveScanAAndRejectsItsUpdates() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusScanIsolation-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let slowFolderURL = rootURL.appendingPathComponent("Slow")
+        let fastFolderURL = rootURL.appendingPathComponent("Fast")
+        try createSyntheticRepository(in: slowFolderURL)
+        try createSyntheticRepository(in: fastFolderURL)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        let parentPIDURL = rootURL.appendingPathComponent("parent.pid")
+        let childPIDURL = rootURL.appendingPathComponent("child.pid")
+        try writeScannerFixture(
+            to: scriptURL,
+            slowParentPIDURL: parentPIDURL,
+            slowChildPIDURL: childPIDURL
+        )
+
+        let scanner = RepositoryScanner(
+            policy: RepositoryScanPolicy(fetchTimeout: .seconds(10)),
+            git: GitCommandRunner(executableURL: scriptURL)
+        )
+        let model = AppModel(scanner: scanner)
+
+        model.selectFolder(slowFolderURL)
+        try await waitUntil(timeout: .seconds(2)) {
+            FileManager.default.fileExists(atPath: childPIDURL.path)
+        }
+
+        model.selectFolder(fastFolderURL)
+        try await waitUntil(timeout: .seconds(2)) {
+            model.phase == .loaded && model.catalogScan?.folderURL == fastFolderURL
+        }
+
+        let parentPID = try processID(in: parentPIDURL)
+        let childPID = try processID(in: childPIDURL)
+        try await waitUntil(timeout: .seconds(2)) {
+            !self.processExists(parentPID) && !self.processExists(childPID)
+        }
+
+        XCTAssertEqual(model.catalogScan?.folderURL, fastFolderURL)
+        XCTAssertEqual(model.catalogScan?.projects.map(\.name), ["Repository"])
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testScannerCancellationDuringFetchEndsGitAndPublishesNoProject() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusActiveCancellation-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try createSyntheticRepository(in: rootURL)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        let parentPIDURL = rootURL.appendingPathComponent("parent.pid")
+        let childPIDURL = rootURL.appendingPathComponent("child.pid")
+        try writeScannerFixture(
+            to: scriptURL,
+            slowParentPIDURL: parentPIDURL,
+            slowChildPIDURL: childPIDURL,
+            slowPathPattern: "*"
+        )
+
+        let scanner = RepositoryScanner(
+            policy: RepositoryScanPolicy(fetchTimeout: .seconds(10)),
+            git: GitCommandRunner(executableURL: scriptURL)
+        )
+        var updates: [CatalogScan] = []
+        var progress: [RepositoryScanProgress] = []
+        let task = Task {
+            try await scanner.scan(
+                folderURL: rootURL,
+                progress: { progress.append($0) },
+                update: { updates.append($0) }
+            )
+        }
+
+        try await waitUntil(timeout: .seconds(2)) {
+            FileManager.default.fileExists(atPath: childPIDURL.path)
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected the active scan to be cancelled")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        let parentPID = try processID(in: parentPIDURL)
+        let childPID = try processID(in: childPIDURL)
+        try await waitUntil(timeout: .seconds(2)) {
+            !self.processExists(parentPID) && !self.processExists(childPID)
+        }
+
+        XCTAssertTrue(updates.isEmpty)
+        XCTAssertFalse(progress.contains { $0.isFinished })
+    }
+
+    @MainActor
+    func testFetchTimeoutIsExplicitAndKeepsCachedReferencesVisible() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusTimeout-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try createSyntheticRepository(in: rootURL)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        let parentPIDURL = rootURL.appendingPathComponent("parent.pid")
+        let childPIDURL = rootURL.appendingPathComponent("child.pid")
+        try writeScannerFixture(
+            to: scriptURL,
+            slowParentPIDURL: parentPIDURL,
+            slowChildPIDURL: childPIDURL,
+            slowPathPattern: "*"
+        )
+
+        let result = try await RepositoryScanner(
+            policy: RepositoryScanPolicy(fetchTimeout: .milliseconds(100)),
+            git: GitCommandRunner(executableURL: scriptURL)
+        ).scan(folderURL: rootURL, progress: { _ in })
+
+        let project = try XCTUnwrap(result.projects.first)
+        XCTAssertTrue(project.branches.isEmpty)
+        XCTAssertEqual(
+            project.warning,
+            "Refreshing origin timed out; cached remote references are shown."
+        )
+    }
+
+    func testStandardScanPolicyUsesFortyFiveSecondFetchDeadline() {
+        XCTAssertEqual(RepositoryScanPolicy.standard.fetchTimeout, .seconds(45))
     }
 
     @MainActor
@@ -310,6 +442,90 @@ final class ModelsTests: XCTestCase {
         XCTAssertNil(GitHubRemote.parse("git@notgithub.com:openai/codex.git"))
         XCTAssertNil(GitHubRemote.parse("https://github.com/owner"))
         XCTAssertNil(GitHubRemote.parse(""))
+    }
+
+    private func makeTemporaryDirectory(prefix: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(prefix)\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
+    }
+
+    private func createSyntheticRepository(in folderURL: URL) throws {
+        try FileManager.default.createDirectory(
+            at: folderURL
+                .appendingPathComponent("Repository")
+                .appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+    }
+
+    private func writeScannerFixture(
+        to scriptURL: URL,
+        slowParentPIDURL: URL,
+        slowChildPIDURL: URL,
+        slowPathPattern: String = "*Slow*"
+    ) throws {
+        let script = """
+        #!/bin/sh
+        if [ "$1" = "remote" ]; then
+            if [ "$2" = "get-url" ]; then
+                echo "https://github.com/example/repository.git"
+            else
+                echo "origin"
+            fi
+            exit 0
+        fi
+
+        if [ "$1" = "fetch" ]; then
+            case "$PWD" in
+                \(slowPathPattern))
+                    echo $$ > "\(slowParentPIDURL.path)"
+                    trap '' TERM
+                    /bin/sleep 30 &
+                    child=$!
+                    echo "$child" > "\(slowChildPIDURL.path)"
+                    wait "$child"
+                    while :; do /bin/sleep 30; done
+                    ;;
+            esac
+        fi
+        exit 0
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: scriptURL.path
+        )
+    }
+
+    private func processID(in url: URL) throws -> pid_t {
+        let contents = try String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try XCTUnwrap(pid_t(contents))
+    }
+
+    private func processExists(_ processID: pid_t) -> Bool {
+        kill(processID, 0) == 0 || errno == EPERM
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeout: Duration,
+        condition: () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            guard clock.now < deadline else {
+                XCTFail("Condition was not satisfied before timeout")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private static func createGitHubRepository(at repositoryURL: URL) async throws {

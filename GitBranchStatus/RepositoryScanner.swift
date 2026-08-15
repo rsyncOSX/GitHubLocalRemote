@@ -25,6 +25,12 @@ enum RepositoryWarnings {
     }
 }
 
+struct RepositoryScanPolicy: Sendable {
+    static let standard = RepositoryScanPolicy(fetchTimeout: .seconds(45))
+
+    let fetchTimeout: Duration
+}
+
 struct RepositoryScanner: Sendable {
     private struct QualifiedRepository {
         let url: URL
@@ -32,11 +38,22 @@ struct RepositoryScanner: Sendable {
         let remote: GitHubRemote
     }
 
-    private let git = GitCommandRunner()
-    private let fetchTimeout: Duration
+    private let git: GitCommandRunner
+    private let policy: RepositoryScanPolicy
 
-    init(fetchTimeout: Duration = .seconds(15)) {
-        self.fetchTimeout = fetchTimeout
+    init(
+        policy: RepositoryScanPolicy = .standard,
+        git: GitCommandRunner = GitCommandRunner()
+    ) {
+        self.policy = policy
+        self.git = git
+    }
+
+    init(fetchTimeout: Duration, git: GitCommandRunner = GitCommandRunner()) {
+        self.init(
+            policy: RepositoryScanPolicy(fetchTimeout: fetchTimeout),
+            git: git
+        )
     }
 
     func scan(
@@ -235,28 +252,31 @@ struct RepositoryScanner: Sendable {
         remoteName: String,
         remote: GitHubRemote
     ) async throws -> ProjectScan {
-        let fetchResult: GitCommandResult?
+        let warning: String?
         do {
-            fetchResult = try await git.run(
+            let fetchResult = try await git.run(
                 ["fetch", "--prune", "--quiet", remoteName],
                 in: repositoryURL,
                 allowFailure: true,
-                timeout: fetchTimeout
+                timeout: policy.fetchTimeout
             )
+            warning = if fetchResult.exitCode != 0 {
+                fetchResult.errorOutput.isEmpty
+                    ? "Could not refresh \(remoteName); cached remote references are shown."
+                    : "Could not refresh \(remoteName): \(fetchResult.errorOutput)"
+            } else {
+                nil
+            }
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as GitCommandError {
+            if case .timedOut = error {
+                warning = "Refreshing \(remoteName) timed out; cached remote references are shown."
+            } else {
+                warning = "Could not refresh \(remoteName); cached remote references are shown."
+            }
         } catch {
-            fetchResult = nil
-        }
-
-        let warning: String? = if let fetchResult, fetchResult.exitCode != 0 {
-            fetchResult.errorOutput.isEmpty
-                ? "Could not refresh \(remoteName); cached remote references are shown."
-                : "Could not refresh \(remoteName): \(fetchResult.errorOutput)"
-        } else if fetchResult == nil {
-            "Could not refresh \(remoteName); cached remote references are shown."
-        } else {
-            nil
+            warning = "Could not refresh \(remoteName); cached remote references are shown."
         }
 
         do {

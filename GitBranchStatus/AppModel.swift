@@ -10,8 +10,13 @@ final class AppModel {
     var errorMessage: String?
     var scanProgress: RepositoryScanProgress?
 
-    @ObservationIgnored private let scanner = RepositoryScanner()
+    @ObservationIgnored private let scanner: RepositoryScanner
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanGeneration = 0
+
+    init(scanner: RepositoryScanner = RepositoryScanner(policy: .standard)) {
+        self.scanner = scanner
+    }
 
     var selectedProject: ProjectScan? {
         guard let selectedProjectID else { return nil }
@@ -35,6 +40,8 @@ final class AppModel {
 
     private func scan(folderURL: URL) {
         scanTask?.cancel()
+        scanGeneration += 1
+        let generation = scanGeneration
         phase = .scanning
         errorMessage = nil
         scanProgress = .discoveringRepositories
@@ -43,19 +50,23 @@ final class AppModel {
             do {
                 let result = try await scanner.scan(
                     folderURL: folderURL,
-                    progress: { [weak self] progress in
-                        guard !Task.isCancelled else { return }
-                        self?.scanProgress = progress
+                    progress: { progress in
+                        guard !Task.isCancelled,
+                              self.scanGeneration == generation
+                        else { return }
+                        self.scanProgress = progress
                     },
-                    update: { [weak self] partialResult in
-                        guard !Task.isCancelled else { return }
-                        self?.catalogScan = partialResult
-                        if self?.selectedProjectID == nil {
-                            self?.selectedProjectID = partialResult.projects.first?.id
+                    update: { partialResult in
+                        guard !Task.isCancelled,
+                              self.scanGeneration == generation
+                        else { return }
+                        self.catalogScan = partialResult
+                        if self.selectedProjectID == nil {
+                            self.selectedProjectID = partialResult.projects.first?.id
                         }
                     }
                 )
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, scanGeneration == generation else { return }
 
                 catalogScan = result
                 if let selectedProjectID,
@@ -70,7 +81,7 @@ final class AppModel {
             } catch is CancellationError {
                 return
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, scanGeneration == generation else { return }
                 phase = catalogScan == nil ? .idle : .loaded
                 scanProgress = nil
                 errorMessage = error.localizedDescription

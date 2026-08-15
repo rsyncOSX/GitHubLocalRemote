@@ -1,7 +1,7 @@
 # GitHub scan robustness review
 
-Date: 2026-07-26  
-Reviewed branch: `version-1.0.2`  
+Date: 2026-08-15
+Reviewed branch: `version-1.0.3`
 Baseline: `main`
 
 ## Verdict
@@ -26,7 +26,7 @@ The current implementation:
 - no longer depends on the ProcessGit package that introduced the observed
   scan stall.
 
-The full serial test suite currently passes: 16 tests with no failures.
+The full test suite currently passes: 28 tests with no failures.
 
 ## Failure analysis
 
@@ -48,117 +48,60 @@ ways a scan could appear frozen:
 2. Successfully scanned projects were not exposed to the UI until every
    repository had finished.
 
-## Remaining issues
+## Resolution status
 
-### P1 — Scan cancellation does not propagate through `Task.detached`
+### P1 — Scan cancellation does not propagate through `Task.detached` — resolved
 
-`RepositoryScanner.scan` still wraps the scan in `Task.detached`. A detached task
-does not inherit the lifetime or cancellation state of the task awaiting it.
-Consequently, selecting another folder or starting another scan may cancel the
-`AppModel` task without cancelling the detached scan and its active Git command.
-An older scan could continue consuming resources or publish stale updates.
+`RepositoryScanner.scan` now runs as structured child work. `AppModel` cancels
+the previous task and uses a scan generation to reject progress, partial catalog,
+completion, or error updates from an older scan.
 
-Recommended fix:
+Coverage now starts scan A with an active, deliberately slow Git subprocess,
+starts scan B, and verifies that:
 
-- Remove the `Task.detached` wrapper now that Git execution is asynchronous.
-- Run the scan as structured child work so cancellation propagates from
-  `AppModel` into `RepositoryScanner` and `GitCommandRunner`.
-- Add a regression test that starts a deliberately slow scan, cancels it, then
-  verifies that its Git process ends and that it cannot publish further updates.
+- scan B becomes and remains the displayed catalog;
+- scan A publishes no finished progress or project update;
+- scan A's Git process and child process both terminate promptly.
 
-Acceptance criteria:
+### P2 — The 15-second fetch timeout is a fixed policy — resolved
 
-- Starting scan B cancels scan A.
-- No progress or catalog update from scan A is accepted after cancellation.
-- The active Git subprocess from scan A terminates promptly.
+The fetch deadline is centralized in `RepositoryScanPolicy`, with a 45-second
+application default and constructor injection for deterministic tests. A fetch
+timeout is reported explicitly and cached references remain visible.
 
-### P2 — The 15-second fetch timeout is a fixed policy
+Coverage verifies the default policy, a short injected deadline, explicit
+timeout reporting, and cached-reference fallback.
 
-The deadline prevents an infinite stall, but 15 seconds may be too short for a
-large repository or a slow network. A timed-out fetch falls back safely to
-cached references, but the displayed comparison may be stale.
+### P2 — Cancellation terminates only the direct Git process — resolved
 
-Recommended fix:
+Git is launched in a dedicated POSIX process group. Timeout and user
+cancellation send `SIGTERM` to the group, then escalate to `SIGKILL` after a
+short grace period if any group member remains. Readers stay active until every
+group member closes its inherited output descriptors.
 
-- Make the fetch deadline configurable in one application-level policy.
-- Consider a default between 30 and 60 seconds.
-- Preserve the current cached-reference warning when a deadline expires.
-- Ideally distinguish a timeout warning from other fetch failures.
+Coverage uses a command that spawns a child, ignores `SIGTERM` in the parent,
+and verifies that timeout and user cancellation leave neither process running.
 
-Acceptance criteria:
+### P2 — Existing parity tests compare the runner with itself — resolved
 
-- A slow fetch cannot block the catalog indefinitely.
-- The configured deadline is covered by a deterministic test.
-- A timeout is reported explicitly and cached references remain visible.
+`GitCommandRunner2Tests` has been replaced by `GitCommandRunnerTests`. Tests now
+assert contract values directly: output, error output, exit status, working
+directory, allowed and disallowed failures, timeout, cancellation, environment
+policy, process-tree cleanup, and high-volume concurrent stdout/stderr.
 
-### P2 — Cancellation terminates only the direct Git process
-
-The cancellation handler terminates the `git` process and closes the local pipe
-readers. Git may spawn transport children such as SSH or `git-remote-https`.
-Those descendants normally exit with Git, but the implementation does not
-guarantee that the whole process tree is terminated.
-
-Recommended fix:
-
-- Investigate launching Git in its own process group and terminating the group,
-  or otherwise track and terminate transport children.
-- Retain the existing SSH batch/connect timeout as defense in depth.
-- Add a test command that spawns a child and verify that cancellation leaves no
-  descendant running.
-
-Acceptance criteria:
-
-- Timeout and user cancellation leave no Git transport process behind.
-- Output readers always unblock during cancellation.
-
-### P2 — Existing parity tests compare the runner with itself
-
-Several tests create both `originalRunner` and `processGitRunner` as
-`GitCommandRunner`. Those comparisons can only prove that two executions of the
-same implementation returned equivalent results; they do not compare the
-current runner with an independent reference implementation.
-
-Recommended fix:
-
-- Replace the parity framing with behavior-based tests.
-- Assert exact output, error output, exit status, working-directory behavior,
-  large concurrent stdout/stderr handling, cancellation, and timeout behavior.
-- Rename `GitCommandRunner2Tests` to `GitCommandRunnerTests`.
-
-Acceptance criteria:
-
-- Every test can fail because of a specific contract violation.
-- No expected value is produced by the same code path being tested.
-- Include a high-volume stdout/stderr test to guard against pipe deadlocks.
-
-### P3 — Non-interactive SSH policy overrides `GIT_SSH_COMMAND`
+### P3 — Non-interactive SSH policy overrides `GIT_SSH_COMMAND` — remains open
 
 The runner sets `GIT_SSH_COMMAND` for every Git invocation. SSH still reads the
 user's SSH configuration, but an existing environment-provided wrapper or
 custom command is replaced.
 
-Recommended fix:
+Future work should scope network-specific overrides to fetch and explicitly
+decide whether a pre-existing `GIT_SSH_COMMAND` is preserved or intentionally
+replaced. Fetch must remain noninteractive.
 
-- Apply network-specific environment overrides only to commands that need them,
-  especially `fetch`.
-- Decide whether an existing `GIT_SSH_COMMAND` should be preserved or whether
-  the application should document that scans always use `/usr/bin/ssh`.
-- Add coverage for repositories that rely on standard SSH configuration.
+## Current conclusion
 
-Acceptance criteria:
-
-- Local Git commands are not given unnecessary network policy.
-- Fetch remains non-interactive.
-- The behavior for a pre-existing `GIT_SSH_COMMAND` is explicit and tested.
-
-## Recommended order
-
-1. Remove `Task.detached` and add cancellation-isolation coverage.
-2. Make the fetch deadline configurable and improve timeout reporting.
-3. Strengthen process-tree cancellation.
-4. Replace the self-parity tests with contract tests.
-5. Scope and document the SSH environment policy.
-
-After the P1 item and the timeout-policy decision are complete, the current
-implementation can reasonably be considered a hardened replacement for the
-scanner on `main`.
+All P1 and P2 items recorded by this review are resolved on `version-1.0.3`.
+The scanner now has structured cancellation, stale-update isolation, bounded
+fetches, process-tree termination, and contract-based runner tests. The P3 SSH
+environment-policy item remains open.

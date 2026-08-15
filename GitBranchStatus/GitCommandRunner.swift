@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import os
 
@@ -25,6 +26,17 @@ enum GitCommandError: LocalizedError, Sendable {
 }
 
 struct GitCommandRunner: Sendable {
+    private let executableURL: URL
+    private let baseEnvironment: [String: String]
+
+    init(
+        executableURL: URL = URL(fileURLWithPath: "/usr/bin/git"),
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        self.executableURL = executableURL
+        self.baseEnvironment = baseEnvironment
+    }
+
     func run(
         _ arguments: [String],
         in directory: URL,
@@ -40,7 +52,10 @@ struct GitCommandRunner: Sendable {
                     timeout: timeout
                 )
             } else {
-                processResult = try await execute(arguments, in: directory)
+                processResult = try await execute(
+                    arguments,
+                    in: directory
+                )
             }
         } catch is CancellationError {
             throw CancellationError()
@@ -83,7 +98,12 @@ struct GitCommandRunner: Sendable {
 
         return try await withThrowingTaskGroup(of: Outcome.self) { group in
             group.addTask {
-                .completed(try await execute(arguments, in: directory))
+                .completed(
+                    try await execute(
+                        arguments,
+                        in: directory
+                    )
+                )
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
@@ -108,17 +128,68 @@ struct GitCommandRunner: Sendable {
         _ arguments: [String],
         in directory: URL
     ) async throws -> ProcessResult {
-        let process = Process()
         let standardOutput = Pipe()
         let standardError = Pipe()
         let cancellation = ProcessCancellation()
 
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = arguments
-        process.currentDirectoryURL = directory
-        process.standardOutput = standardOutput
-        process.standardError = standardError
-        process.environment = ProcessInfo.processInfo.environment.merging(
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+
+            let processID: pid_t
+            do {
+                processID = try spawn(
+                    arguments,
+                    in: directory,
+                    environment: nonInteractiveEnvironment,
+                    standardOutput: standardOutput,
+                    standardError: standardError
+                )
+            } catch {
+                try? standardOutput.fileHandleForWriting.close()
+                try? standardError.fileHandleForWriting.close()
+                try? standardOutput.fileHandleForReading.close()
+                try? standardError.fileHandleForReading.close()
+                throw error
+            }
+
+            // The parent must close its copies. Otherwise readers do not receive
+            // EOF after every process in the child process group exits.
+            try? standardOutput.fileHandleForWriting.close()
+            try? standardError.fileHandleForWriting.close()
+
+            if cancellation.register(processGroupID: processID) {
+                cancellation.terminateRegisteredProcessGroup()
+            }
+            defer { cancellation.finished() }
+
+            do {
+                async let output = Self.read(standardOutput.fileHandleForReading)
+                async let errorOutput = Self.read(standardError.fileHandleForReading)
+                async let exitCode = Self.waitForProcess(processID)
+
+                let (outputData, errorData, status) = try await (
+                    output,
+                    errorOutput,
+                    exitCode
+                )
+                try Task.checkCancellation()
+
+                return ProcessResult(
+                    output: outputData,
+                    errorOutput: errorData,
+                    exitCode: status
+                )
+            } catch {
+                cancellation.cancel()
+                throw error
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private var nonInteractiveEnvironment: [String: String] {
+        baseEnvironment.merging(
             [
                 "GIT_TERMINAL_PROMPT": "0",
                 "GCM_INTERACTIVE": "Never",
@@ -128,69 +199,129 @@ struct GitCommandRunner: Sendable {
             ],
             uniquingKeysWith: { _, nonInteractiveValue in nonInteractiveValue }
         )
-        let terminationEvents = AsyncStream<Void> { continuation in
-            process.terminationHandler = { _ in
-                continuation.yield(())
-                continuation.finish()
-            }
+    }
+
+    private func spawn(
+        _ arguments: [String],
+        in directory: URL,
+        environment: [String: String],
+        standardOutput: Pipe,
+        standardError: Pipe
+    ) throws -> pid_t {
+        var fileActions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+
+        guard posix_spawn_file_actions_init(&fileActions) == 0,
+              posix_spawnattr_init(&attributes) == 0
+        else {
+            throw GitCommandError.launchFailed("Could not initialize process attributes.")
+        }
+        defer {
+            posix_spawn_file_actions_destroy(&fileActions)
+            posix_spawnattr_destroy(&attributes)
         }
 
-        return try await withTaskCancellationHandler {
-            try Task.checkCancellation()
+        let outputReadDescriptor = standardOutput.fileHandleForReading.fileDescriptor
+        let outputWriteDescriptor = standardOutput.fileHandleForWriting.fileDescriptor
+        let errorReadDescriptor = standardError.fileHandleForReading.fileDescriptor
+        let errorWriteDescriptor = standardError.fileHandleForWriting.fileDescriptor
 
-            do {
-                try process.run()
-            } catch {
-                throw GitCommandError.launchFailed(error.localizedDescription)
+        try checkSpawnAction(posix_spawn_file_actions_adddup2(
+            &fileActions,
+            outputWriteDescriptor,
+            STDOUT_FILENO
+        ))
+        try checkSpawnAction(posix_spawn_file_actions_adddup2(
+            &fileActions,
+            errorWriteDescriptor,
+            STDERR_FILENO
+        ))
+        try checkSpawnAction(posix_spawn_file_actions_addclose(&fileActions, outputReadDescriptor))
+        try checkSpawnAction(posix_spawn_file_actions_addclose(&fileActions, errorReadDescriptor))
+        if outputWriteDescriptor != STDOUT_FILENO {
+            try checkSpawnAction(posix_spawn_file_actions_addclose(&fileActions, outputWriteDescriptor))
+        }
+        if errorWriteDescriptor != STDERR_FILENO {
+            try checkSpawnAction(posix_spawn_file_actions_addclose(&fileActions, errorWriteDescriptor))
+        }
+        try directory.path.withCString { path in
+            try checkSpawnAction(posix_spawn_file_actions_addchdir(&fileActions, path))
+        }
+
+        try checkSpawnAction(posix_spawnattr_setflags(
+            &attributes,
+            Int16(POSIX_SPAWN_SETPGROUP)
+        ))
+        try checkSpawnAction(posix_spawnattr_setpgroup(&attributes, 0))
+
+        let argumentStrings = [executableURL.path] + arguments
+        let environmentStrings = environment
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+        var processID: pid_t = 0
+
+        let result = executableURL.path.withCString { executablePath in
+            Self.withCStringArray(argumentStrings) { argumentPointers in
+                Self.withCStringArray(environmentStrings) { environmentPointers in
+                    posix_spawn(
+                        &processID,
+                        executablePath,
+                        &fileActions,
+                        &attributes,
+                        argumentPointers,
+                        environmentPointers
+                    )
+                }
             }
+        }
+        try checkSpawnAction(result)
+        return processID
+    }
 
-            // The parent must close its copies. Otherwise readToEnd() can wait
-            // forever for EOF after Git has already exited.
-            try? standardOutput.fileHandleForWriting.close()
-            try? standardError.fileHandleForWriting.close()
+    private func checkSpawnAction(_ result: Int32) throws {
+        guard result == 0 else {
+            throw GitCommandError.launchFailed(String(cString: strerror(result)))
+        }
+    }
 
-            if cancellation.register(
-                process,
-                readHandles: [
-                    standardOutput.fileHandleForReading,
-                    standardError.fileHandleForReading,
-                ]
-            ) {
-                cancellation.terminateRegisteredProcess()
-            }
-            defer { cancellation.finished() }
+    private static func withCStringArray<Result>(
+        _ strings: [String],
+        operation: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) throws -> Result
+    ) rethrows -> Result {
+        let pointers = strings.map { strdup($0) }
+        defer { pointers.forEach { free($0) } }
 
-            async let output = Self.read(standardOutput.fileHandleForReading)
-            async let errorOutput = Self.read(standardError.fileHandleForReading)
-            async let termination: Void = Self.waitForTermination(terminationEvents)
-
-            let (outputData, errorData, _) = try await (
-                output,
-                errorOutput,
-                termination
-            )
-            try Task.checkCancellation()
-
-            return ProcessResult(
-                output: outputData,
-                errorOutput: errorData,
-                exitCode: process.terminationStatus
-            )
-        } onCancel: {
-            cancellation.cancel()
+        var optionalPointers: [UnsafeMutablePointer<CChar>?] = pointers
+        optionalPointers.append(nil)
+        return try optionalPointers.withUnsafeMutableBufferPointer { buffer in
+            try operation(buffer.baseAddress!)
         }
     }
 
     private static func read(_ handle: FileHandle) async throws -> Data {
+        // FileHandle has no native async read-to-EOF API. The detached task is
+        // limited to this blocking syscall; process lifetime remains structured.
         try await Task.detached {
             try handle.readToEnd() ?? Data()
         }.value
     }
 
-    private static func waitForTermination(_ events: AsyncStream<Void>) async {
-        for await _ in events {
-            return
-        }
+    private static func waitForProcess(_ processID: pid_t) async throws -> Int32 {
+        // waitpid is blocking. Cancellation is made cooperative by the parent's
+        // cancellation handler terminating the registered process group.
+        try await Task.detached {
+            var status: Int32 = 0
+            while waitpid(processID, &status, 0) == -1 {
+                if errno != EINTR {
+                    throw GitCommandError.launchFailed(String(cString: strerror(errno)))
+                }
+            }
+
+            if status & 0x7f == 0 {
+                return (status >> 8) & 0xff
+            }
+            return 128 + (status & 0x7f)
+        }.value
     }
 }
 
@@ -202,45 +333,46 @@ private struct ProcessResult: Sendable {
 
 private final class ProcessCancellation: Sendable {
     private struct State {
-        var process: Process?
-        var readHandles: [FileHandle] = []
+        var processGroupID: pid_t?
         var cancellationRequested = false
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    func register(_ process: Process, readHandles: [FileHandle]) -> Bool {
+    func register(processGroupID: pid_t) -> Bool {
         state.withLock { state in
-            state.process = process
-            state.readHandles = readHandles
+            state.processGroupID = processGroupID
             return state.cancellationRequested
         }
     }
 
     func cancel() {
-        let resources = state.withLock { state in
+        let processGroupID = state.withLock { state in
             state.cancellationRequested = true
-            return (state.process, state.readHandles)
+            return state.processGroupID
         }
-        terminate(resources.0)
-        resources.1.forEach { try? $0.close() }
+        terminate(processGroupID)
     }
 
-    func terminateRegisteredProcess() {
-        let resources = state.withLock { ($0.process, $0.readHandles) }
-        terminate(resources.0)
-        resources.1.forEach { try? $0.close() }
+    func terminateRegisteredProcessGroup() {
+        terminate(state.withLock { $0.processGroupID })
     }
 
     func finished() {
-        state.withLock {
-            $0.process = nil
-            $0.readHandles = []
-        }
+        state.withLock { $0.processGroupID = nil }
     }
 
-    private func terminate(_ process: Process?) {
-        guard let process, process.isRunning else { return }
-        process.terminate()
+    private func terminate(_ processGroupID: pid_t?) {
+        guard let processGroupID else { return }
+
+        _ = kill(-processGroupID, SIGTERM)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(250)) {
+            let isStillRegistered = self.state.withLock {
+                $0.processGroupID == processGroupID
+            }
+            if isStillRegistered, kill(-processGroupID, 0) == 0 {
+                _ = kill(-processGroupID, SIGKILL)
+            }
+        }
     }
 }

@@ -16,7 +16,7 @@
 		A10000000000000000000008 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* XCTest.framework */; };
 		A1000000000000000000000A /* WelcomeRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* WelcomeRenderingTests.swift */; };
 		A1000000000000000000000B /* GitBranchStatus.icon in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* GitBranchStatus.icon */; };
-		A1000000000000000000000C /* GitCommandRunner2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* GitCommandRunner2Tests.swift */; };
+		A1000000000000000000000C /* GitCommandRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* GitCommandRunnerTests.swift */; };
 		E96B98E33015CCA500D845CE /* GitCommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E96B98E23015CC9900D845CE /* GitCommandRunner.swift */; };
 /* End PBXBuildFile section */
 
@@ -43,7 +43,7 @@
 		B1000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B1000000000000000000000C /* WelcomeRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeRenderingTests.swift; sourceTree = "<group>"; };
 		B1000000000000000000000D /* GitBranchStatus.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = GitBranchStatus.icon; sourceTree = "<group>"; };
-		B1000000000000000000000E /* GitCommandRunner2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner2Tests.swift; sourceTree = "<group>"; };
+		B1000000000000000000000E /* GitCommandRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunnerTests.swift; sourceTree = "<group>"; };
 		E96B98E23015CC9900D845CE /* GitCommandRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitCommandRunner.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -96,7 +96,7 @@
 			children = (
 				B10000000000000000000007 /* ModelsTests.swift */,
 				B1000000000000000000000C /* WelcomeRenderingTests.swift */,
-				B1000000000000000000000E /* GitCommandRunner2Tests.swift */,
+				B1000000000000000000000E /* GitCommandRunnerTests.swift */,
 			);
 			path = GitBranchStatusTests;
 			sourceTree = "<group>";
@@ -231,7 +231,7 @@
 			files = (
 				A10000000000000000000007 /* ModelsTests.swift in Sources */,
 				A1000000000000000000000A /* WelcomeRenderingTests.swift in Sources */,
-				A1000000000000000000000C /* GitCommandRunner2Tests.swift in Sources */,
+				A1000000000000000000000C /* GitCommandRunnerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

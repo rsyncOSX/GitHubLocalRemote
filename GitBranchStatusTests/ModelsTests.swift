@@ -1,9 +1,12 @@
 @testable import GitBranchStatus
 import Darwin
-import XCTest
+import Foundation
+import Testing
 
-final class ModelsTests: XCTestCase {
+@Suite("Models and repository scanning", .serialized)
+struct ModelsTests {
     @MainActor
+    @Test
     func testScannerHonorsCallerCancellation() async throws {
         let folderURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitBranchStatusCancellation-\(UUID().uuidString)")
@@ -23,15 +26,16 @@ final class ModelsTests: XCTestCase {
 
         do {
             _ = try await task.value
-            XCTFail("Expected the scan to be cancelled")
+            Issue.record("Expected the scan to be cancelled")
         } catch is CancellationError {
             // Expected.
         } catch {
-            XCTFail("Unexpected error: \(error)")
+            Issue.record("Unexpected error: \(error)")
         }
     }
 
     @MainActor
+    @Test
     func testStartingScanBCancelsActiveScanAAndRejectsItsUpdates() async throws {
         let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusScanIsolation-")
         defer { try? FileManager.default.removeItem(at: rootURL) }
@@ -71,13 +75,14 @@ final class ModelsTests: XCTestCase {
             !self.processExists(parentPID) && !self.processExists(childPID)
         }
 
-        XCTAssertEqual(model.catalogScan?.folderURL, fastFolderURL)
-        XCTAssertEqual(model.catalogScan?.projects.map(\.name), ["Repository"])
-        XCTAssertEqual(model.phase, .loaded)
-        XCTAssertNil(model.errorMessage)
+        #expect(model.catalogScan?.folderURL == fastFolderURL)
+        #expect(model.catalogScan?.projects.map(\.name) == ["Repository"])
+        #expect(model.phase == .loaded)
+        #expect(model.errorMessage == nil)
     }
 
     @MainActor
+    @Test
     func testScannerCancellationDuringFetchEndsGitAndPublishesNoProject() async throws {
         let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusActiveCancellation-")
         defer { try? FileManager.default.removeItem(at: rootURL) }
@@ -114,7 +119,7 @@ final class ModelsTests: XCTestCase {
 
         do {
             _ = try await task.value
-            XCTFail("Expected the active scan to be cancelled")
+            Issue.record("Expected the active scan to be cancelled")
         } catch is CancellationError {
             // Expected.
         }
@@ -125,11 +130,12 @@ final class ModelsTests: XCTestCase {
             !self.processExists(parentPID) && !self.processExists(childPID)
         }
 
-        XCTAssertTrue(updates.isEmpty)
-        XCTAssertFalse(progress.contains { $0.isFinished })
+        #expect(updates.isEmpty)
+        #expect(!(progress.contains { $0.isFinished }))
     }
 
     @MainActor
+    @Test
     func testFetchTimeoutIsExplicitAndKeepsCachedReferencesVisible() async throws {
         let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusTimeout-")
         defer { try? FileManager.default.removeItem(at: rootURL) }
@@ -150,19 +156,18 @@ final class ModelsTests: XCTestCase {
             git: GitCommandRunner(executableURL: scriptURL)
         ).scan(folderURL: rootURL, progress: { _ in })
 
-        let project = try XCTUnwrap(result.projects.first)
-        XCTAssertTrue(project.branches.isEmpty)
-        XCTAssertEqual(
-            project.warning,
-            "Refreshing origin timed out; cached remote references are shown."
-        )
+        let project = try #require(result.projects.first)
+        #expect(project.branches.isEmpty)
+        #expect(project.warning == "Refreshing origin timed out; cached remote references are shown.")
     }
 
+    @Test
     func testStandardScanPolicyUsesFortyFiveSecondFetchDeadline() {
-        XCTAssertEqual(RepositoryScanPolicy.standard.fetchTimeout, .seconds(45))
+        #expect(RepositoryScanPolicy.standard.fetchTimeout == .seconds(45))
     }
 
     @MainActor
+    @Test
     func testScannerFinishesEachRepositoryBeforeCheckingTheNext() async throws {
         let fileManager = FileManager.default
         let folderURL = fileManager.temporaryDirectory
@@ -183,9 +188,7 @@ final class ModelsTests: XCTestCase {
             receivedProgress.append(progress)
         }
 
-        XCTAssertEqual(
-            receivedProgress,
-            [
+        #expect(receivedProgress == [
                 .discoveringRepositories,
                 .foundRepositories(
                     githubRepositoryCount: 2,
@@ -196,11 +199,11 @@ final class ModelsTests: XCTestCase {
                 .finished(repositoryName: "First", number: 1, total: 2),
                 .checking(repositoryName: "Second", number: 2, total: 2),
                 .finished(repositoryName: "Second", number: 2, total: 2),
-            ]
-        )
+            ])
     }
 
     @MainActor
+    @Test
     func testScannerPublishesAProjectAsSoonAsItIsScanned() async throws {
         let fileManager = FileManager.default
         let folderURL = fileManager.temporaryDirectory
@@ -231,12 +234,13 @@ final class ModelsTests: XCTestCase {
             update: { updates.append($0) }
         )
 
-        XCTAssertEqual(updates.count, 1)
-        XCTAssertEqual(updates.first?.projects.map(\.name), ["First"])
-        XCTAssertEqual(result.projects.map(\.name), ["First"])
+        #expect(updates.count == 1)
+        #expect(updates.first?.projects.map(\.name) == ["First"])
+        #expect(result.projects.map(\.name) == ["First"])
     }
 
     @MainActor
+    @Test
     func testScannerMarksUncomparableBranchesAsUnknown() async throws {
         let fileManager = FileManager.default
         let folderURL = fileManager.temporaryDirectory
@@ -280,13 +284,14 @@ final class ModelsTests: XCTestCase {
             progress: { _ in }
         )
 
-        let project = try XCTUnwrap(result.projects.first)
-        XCTAssertEqual(project.branches.first?.status, .unknown)
-        XCTAssertNotNil(project.warning)
-        XCTAssertNotEqual(project.branches.first?.status, .inSync)
+        let project = try #require(result.projects.first)
+        #expect(project.branches.first?.status == .unknown)
+        #expect(project.warning != nil)
+        #expect(project.branches.first?.status != .inSync)
     }
 
     @MainActor
+    @Test
     func testScannerFindsRepositoriesInAllVisibleSubdirectories() async throws {
         let fileManager = FileManager.default
         let folderURL = fileManager.temporaryDirectory
@@ -321,13 +326,11 @@ final class ModelsTests: XCTestCase {
             receivedProgress.append(progress)
         }
 
-        XCTAssertEqual(result.candidateDirectoryCount, 4)
-        XCTAssertEqual(result.gitRepositoryCount, 3)
-        XCTAssertEqual(result.githubRepositoryCount, 2)
-        XCTAssertEqual(result.projects.map(\.name), ["Nested", "TopLevel"])
-        XCTAssertEqual(
-            receivedProgress,
-            [
+        #expect(result.candidateDirectoryCount == 4)
+        #expect(result.gitRepositoryCount == 3)
+        #expect(result.githubRepositoryCount == 2)
+        #expect(result.projects.map(\.name) == ["Nested", "TopLevel"])
+        #expect(receivedProgress == [
                 .discoveringRepositories,
                 .foundRepositories(
                     githubRepositoryCount: 2,
@@ -338,10 +341,10 @@ final class ModelsTests: XCTestCase {
                 .finished(repositoryName: "Nested", number: 1, total: 2),
                 .checking(repositoryName: "TopLevel", number: 2, total: 2),
                 .finished(repositoryName: "TopLevel", number: 2, total: 2),
-            ]
-        )
+            ])
     }
 
+    @Test
     func testRepositoryScanProgressDescribesCurrentAndFinishedChecks() {
         let checking = RepositoryScanProgress.checking(
             repositoryName: "GitBranchStatus",
@@ -354,12 +357,13 @@ final class ModelsTests: XCTestCase {
             total: 5
         )
 
-        XCTAssertEqual(checking.message, "Checking GitBranchStatus (2 of 5)…")
-        XCTAssertFalse(checking.isFinished)
-        XCTAssertEqual(finished.message, "Finished GitBranchStatus (2 of 5)")
-        XCTAssertTrue(finished.isFinished)
+        #expect(checking.message == "Checking GitBranchStatus (2 of 5)…")
+        #expect(!(checking.isFinished))
+        #expect(finished.message == "Finished GitBranchStatus (2 of 5)")
+        #expect(finished.isFinished)
     }
 
+    @Test
     func testRepositoryScanProgressDescribesQualifiedRepositories() {
         let progress = RepositoryScanProgress.foundRepositories(
             githubRepositoryCount: 2,
@@ -367,20 +371,19 @@ final class ModelsTests: XCTestCase {
             candidateDirectoryCount: 8
         )
 
-        XCTAssertEqual(
-            progress.message,
-            "Found 2 GitHub repositories among 3 Git repositories in 8 folders."
-        )
-        XCTAssertFalse(progress.isFinished)
+        #expect(progress.message == "Found 2 GitHub repositories among 3 Git repositories in 8 folders.")
+        #expect(!(progress.isFinished))
     }
 
+    @Test
     func testBranchComparisonClassifiesAllCommitRelationships() {
-        XCTAssertEqual(BranchComparison.classify(ahead: 0, behind: 0), .inSync)
-        XCTAssertEqual(BranchComparison.classify(ahead: 3, behind: 0), .localAhead)
-        XCTAssertEqual(BranchComparison.classify(ahead: 0, behind: 2), .remoteAhead)
-        XCTAssertEqual(BranchComparison.classify(ahead: 4, behind: 1), .diverged)
+        #expect(BranchComparison.classify(ahead: 0, behind: 0) == .inSync)
+        #expect(BranchComparison.classify(ahead: 3, behind: 0) == .localAhead)
+        #expect(BranchComparison.classify(ahead: 0, behind: 2) == .remoteAhead)
+        #expect(BranchComparison.classify(ahead: 4, behind: 1) == .diverged)
     }
 
+    @Test
     func testUnknownBranchIsNotShownAsInSync() {
         let branch = BranchRecord(
             id: "unknown",
@@ -392,14 +395,15 @@ final class ModelsTests: XCTestCase {
             behindCount: nil
         )
 
-        XCTAssertEqual(branch.statusDetail, "Could not compare commits")
-        XCTAssertTrue(BranchFilter.attention.includes(branch))
-        XCTAssertFalse(BranchFilter.inSync.includes(branch))
+        #expect(branch.statusDetail == "Could not compare commits")
+        #expect(BranchFilter.attention.includes(branch))
+        #expect(!(BranchFilter.inSync.includes(branch)))
     }
 
+    @Test
     func testEmptyWarningsAreNotPresentedAsRepositoryProblems() {
-        XCTAssertNil(RepositoryWarnings.combine([]))
-        XCTAssertNil(RepositoryWarnings.combine([nil, "", "  \n  "]))
+        #expect(RepositoryWarnings.combine([]) == nil)
+        #expect(RepositoryWarnings.combine([nil, "", "  \n  "]) == nil)
 
         let project = ProjectScan(
             id: "project",
@@ -412,36 +416,40 @@ final class ModelsTests: XCTestCase {
             warning: "\n"
         )
 
-        XCTAssertNil(project.warningMessage)
+        #expect(project.warningMessage == nil)
     }
 
+    @Test
     func testRepositoryWarningsAreTrimmedAndCombined() {
-        XCTAssertEqual(
-            RepositoryWarnings.combine(["  Fetch failed.  ", nil, "Compare failed.\n"]),
-            "Fetch failed.\nCompare failed."
+        #expect(
+            RepositoryWarnings.combine(["  Fetch failed.  ", nil, "Compare failed.\n"])
+                == "Fetch failed.\nCompare failed."
         )
     }
 
+    @Test
     func testParsesHTTPSGitHubRemote() {
         let remote = GitHubRemote.parse("https://github.com/openai/codex.git")
 
-        XCTAssertEqual(remote?.owner, "openai")
-        XCTAssertEqual(remote?.repository, "codex")
-        XCTAssertEqual(remote?.webURL.absoluteString, "https://github.com/openai/codex")
+        #expect(remote?.owner == "openai")
+        #expect(remote?.repository == "codex")
+        #expect(remote?.webURL.absoluteString == "https://github.com/openai/codex")
     }
 
+    @Test
     func testParsesSCPStyleGitHubRemote() {
         let remote = GitHubRemote.parse("git@github.com:openai/codex.git")
 
-        XCTAssertEqual(remote?.owner, "openai")
-        XCTAssertEqual(remote?.repository, "codex")
+        #expect(remote?.owner == "openai")
+        #expect(remote?.repository == "codex")
     }
 
+    @Test
     func testRejectsNonGitHubAndMalformedRemote() {
-        XCTAssertNil(GitHubRemote.parse("https://gitlab.com/openai/codex.git"))
-        XCTAssertNil(GitHubRemote.parse("git@notgithub.com:openai/codex.git"))
-        XCTAssertNil(GitHubRemote.parse("https://github.com/owner"))
-        XCTAssertNil(GitHubRemote.parse(""))
+        #expect(GitHubRemote.parse("https://gitlab.com/openai/codex.git") == nil)
+        #expect(GitHubRemote.parse("git@notgithub.com:openai/codex.git") == nil)
+        #expect(GitHubRemote.parse("https://github.com/owner") == nil)
+        #expect(GitHubRemote.parse("") == nil)
     }
 
     private func makeTemporaryDirectory(prefix: String) throws -> URL {
@@ -505,7 +513,7 @@ final class ModelsTests: XCTestCase {
     private func processID(in url: URL) throws -> pid_t {
         let contents = try String(contentsOf: url, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return try XCTUnwrap(pid_t(contents))
+        return try #require(pid_t(contents))
     }
 
     private func processExists(_ processID: pid_t) -> Bool {
@@ -521,7 +529,7 @@ final class ModelsTests: XCTestCase {
         let deadline = clock.now.advanced(by: timeout)
         while !condition() {
             guard clock.now < deadline else {
-                XCTFail("Condition was not satisfied before timeout")
+                Issue.record("Condition was not satisfied before timeout")
                 return
             }
             try await Task.sleep(for: .milliseconds(10))

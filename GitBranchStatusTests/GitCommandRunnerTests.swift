@@ -1,21 +1,25 @@
 @testable import GitBranchStatus
 import Darwin
-import XCTest
+import Foundation
+import Testing
 
-final class GitCommandRunnerTests: XCTestCase {
+@Suite("Git command runner", .serialized)
+struct GitCommandRunnerTests {
     private let runner = GitCommandRunner()
 
+    @Test
     func testSuccessfulCommandReturnsExactOutputAndStatus() async throws {
         let result = try await runner.run(
             ["rev-parse", "--show-toplevel"],
             in: repositoryURL
         )
 
-        XCTAssertEqual(result.output, repositoryURL.standardizedFileURL.path)
-        XCTAssertEqual(result.errorOutput, "")
-        XCTAssertEqual(result.exitCode, 0)
+        #expect(result.output == repositoryURL.standardizedFileURL.path)
+        #expect(result.errorOutput == "")
+        #expect(result.exitCode == 0)
     }
 
+    @Test
     func testWorkingDirectoryContainingSpacesIsPreserved() async throws {
         let directory = try makeTemporaryDirectory(prefix: "Git Command Runner ")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -26,13 +30,11 @@ final class GitCommandRunnerTests: XCTestCase {
             in: directory
         )
 
-        XCTAssertEqual(
-            result.output,
-            canonicalPath(directory)
-        )
-        XCTAssertEqual(result.exitCode, 0)
+        #expect(result.output == canonicalPath(directory))
+        #expect(result.exitCode == 0)
     }
 
+    @Test
     func testAllowedFailureReturnsItsOwnContract() async throws {
         let arguments = [
             "rev-parse",
@@ -46,11 +48,12 @@ final class GitCommandRunnerTests: XCTestCase {
             allowFailure: true
         )
 
-        XCTAssertNotEqual(result.exitCode, 0)
-        XCTAssertEqual(result.output, "")
-        XCTAssertFalse(result.errorOutput.isEmpty)
+        #expect(result.exitCode != 0)
+        #expect(result.output == "")
+        #expect(!(result.errorOutput.isEmpty))
     }
 
+    @Test
     func testDisallowedFailureThrowsCommandError() async throws {
         let arguments = [
             "rev-parse",
@@ -60,20 +63,21 @@ final class GitCommandRunnerTests: XCTestCase {
 
         do {
             _ = try await runner.run(arguments, in: repositoryURL)
-            XCTFail("Expected GitCommandError.commandFailed")
+            Issue.record("Expected GitCommandError.commandFailed")
         } catch let GitCommandError.commandFailed(
             actualArguments,
             exitCode,
             message
         ) {
-            XCTAssertEqual(actualArguments, arguments)
-            XCTAssertNotEqual(exitCode, 0)
-            XCTAssertFalse(message.isEmpty)
+            #expect(actualArguments == arguments)
+            #expect(exitCode != 0)
+            #expect(!(message.isEmpty))
         } catch {
-            XCTFail("Unexpected error: \(error)")
+            Issue.record("Unexpected error: \(error)")
         }
     }
 
+    @Test
     func testStandardOutputAndErrorRemainSeparate() async throws {
         let result = try await runner.run(
             [
@@ -85,11 +89,12 @@ final class GitCommandRunnerTests: XCTestCase {
             allowFailure: true
         )
 
-        XCTAssertEqual(result.output, "stdout-data")
-        XCTAssertEqual(result.errorOutput, "stderr-data")
-        XCTAssertEqual(result.exitCode, 7)
+        #expect(result.output == "stdout-data")
+        #expect(result.errorOutput == "stderr-data")
+        #expect(result.exitCode == 7)
     }
 
+    @Test
     func testLargeConcurrentOutputDoesNotDeadlock() async throws {
         let result = try await runner.run(
             [
@@ -102,14 +107,15 @@ final class GitCommandRunnerTests: XCTestCase {
 
         let outputLines = result.output.split(whereSeparator: \.isNewline)
         let errorLines = result.errorOutput.split(whereSeparator: \.isNewline)
-        XCTAssertEqual(outputLines.count, 20_000)
-        XCTAssertEqual(errorLines.count, 20_000)
-        XCTAssertEqual(outputLines.first, "out-0")
-        XCTAssertEqual(outputLines.last, "out-19999")
-        XCTAssertEqual(errorLines.first, "err-0")
-        XCTAssertEqual(errorLines.last, "err-19999")
+        #expect(outputLines.count == 20_000)
+        #expect(errorLines.count == 20_000)
+        #expect(outputLines.first == "out-0")
+        #expect(outputLines.last == "out-19999")
+        #expect(errorLines.first == "err-0")
+        #expect(errorLines.last == "err-19999")
     }
 
+    @Test
     func testCommandsUseTheNonInteractiveEnvironment() async throws {
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_TERMINAL_PROMPT"] = "custom-prompt"
@@ -123,12 +129,10 @@ final class GitCommandRunnerTests: XCTestCase {
         ]
 
         let result = try await configuredRunner.run(arguments, in: repositoryURL)
-        XCTAssertEqual(
-            result.output,
-            "0|Never|/usr/bin/ssh -oBatchMode=yes -oConnectTimeout=10"
-        )
+        #expect(result.output == "0|Never|/usr/bin/ssh -oBatchMode=yes -oConnectTimeout=10")
     }
 
+    @Test
     func testConfiguredTimeoutReturnsPromptly() async throws {
         let clock = ContinuousClock()
         let startedAt = clock.now
@@ -139,16 +143,17 @@ final class GitCommandRunnerTests: XCTestCase {
                 in: repositoryURL,
                 timeout: .milliseconds(100)
             )
-            XCTFail("Expected GitCommandError.timedOut")
+            Issue.record("Expected GitCommandError.timedOut")
         } catch let GitCommandError.timedOut(arguments) {
-            XCTAssertEqual(arguments.last, "wait")
+            #expect(arguments.last == "wait")
         } catch {
-            XCTFail("Unexpected error: \(error)")
+            Issue.record("Unexpected error: \(error)")
         }
 
-        XCTAssertLessThan(startedAt.duration(to: clock.now), .seconds(2))
+        #expect(startedAt.duration(to: clock.now) < .seconds(2))
     }
 
+    @Test
     func testTimeoutTerminatesTheEntireProcessGroup() async throws {
         let directory = try makeTemporaryDirectory(prefix: "GitProcessGroup-")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -169,7 +174,7 @@ final class GitCommandRunnerTests: XCTestCase {
                 in: repositoryURL,
                 timeout: .milliseconds(300)
             )
-            XCTFail("Expected GitCommandError.timedOut")
+            Issue.record("Expected GitCommandError.timedOut")
         } catch is GitCommandError {
             // Expected timeout.
         }
@@ -181,6 +186,7 @@ final class GitCommandRunnerTests: XCTestCase {
         }
     }
 
+    @Test
     func testCallerCancellationTerminatesTheEntireProcessGroup() async throws {
         let directory = try makeTemporaryDirectory(prefix: "GitCancellation-")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -209,7 +215,7 @@ final class GitCommandRunnerTests: XCTestCase {
 
         do {
             _ = try await task.value
-            XCTFail("Expected cancellation")
+            Issue.record("Expected cancellation")
         } catch is CancellationError {
             // Expected.
         }
@@ -264,7 +270,7 @@ final class GitCommandRunnerTests: XCTestCase {
     private func processID(in url: URL) throws -> pid_t {
         let contents = try String(contentsOf: url, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return try XCTUnwrap(pid_t(contents))
+        return try #require(pid_t(contents))
     }
 
     private func processExists(_ processID: pid_t) -> Bool {
@@ -279,7 +285,7 @@ final class GitCommandRunnerTests: XCTestCase {
         let deadline = clock.now.advanced(by: timeout)
         while !condition() {
             guard clock.now < deadline else {
-                XCTFail("Condition was not satisfied before timeout")
+                Issue.record("Condition was not satisfied before timeout")
                 return
             }
             try await Task.sleep(for: .milliseconds(10))

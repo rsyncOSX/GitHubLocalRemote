@@ -77,7 +77,9 @@ sign-app:
 		echo "$$APP_SIGNATURE" | grep -q "Authority=Developer ID Application:" || \
 			(echo "$(APP) is not signed with Developer ID Application"; exit 1); \
 		echo "$$APP_SIGNATURE" | grep -q "Timestamp=" || \
-			(echo "$(APP) signature has no secure timestamp"; exit 1)
+			(echo "$(APP) signature has no secure timestamp"; exit 1); \
+		echo "$$APP_SIGNATURE" | grep -q "flags=.*runtime" || \
+			(echo "$(APP) does not have the hardened runtime enabled"; exit 1)
 	@echo "Creating zip for notarization..."
 	ditto -c -k --keepParent "$(APP_PATH)" "$(ZIP_PATH)"
 	@echo "Developer ID signature verified successfully"

@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct GitBranchStatusApp: App {
     var body: some Scene {
-        WindowGroup {
+        Window("Git Branch Status", id: "main") {
             ContentView()
                 .frame(minWidth: 820, minHeight: 520)
         }

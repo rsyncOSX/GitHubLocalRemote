@@ -13,6 +13,8 @@ local branch with the corresponding branch on GitHub.
 Branches that exist on only one side are included as local-ahead or
 remote-ahead and clearly labeled as local-only or remote-only.
 
+![](images/gitstatus.png)
+
 ## How scanning works
 
 1. Choose a folder containing project folders.

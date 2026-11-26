@@ -212,6 +212,9 @@ private struct ProjectSidebar: View {
                     )
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if !scan.skippedRepositories.isEmpty {
+                        SkippedRepositoriesLabel(repositories: scan.skippedRepositories)
+                    }
                     Text(scan.folderURL.path)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -225,6 +228,27 @@ private struct ProjectSidebar: View {
             }
         }
         .navigationTitle("Projects")
+    }
+}
+
+private struct SkippedRepositoriesLabel: View {
+    let repositories: [SkippedRepository]
+
+    private var details: String {
+        repositories
+            .map { "\($0.directoryURL.path): \($0.reason)" }
+            .joined(separator: "\n\n")
+    }
+
+    var body: some View {
+        Label(
+            "\(repositories.count) \(repositories.count == 1 ? "repository" : "repositories") could not be read",
+            systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
+        .help(details)
+        .accessibilityHint(details)
     }
 }
 
@@ -291,7 +315,7 @@ private struct ProjectDetailView: View {
                 ContentUnavailableView.search(text: searchText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                BranchTable(branches: visibleBranches)
+                BranchTable(branches: visibleBranches, remoteName: project.remoteName)
             }
         }
         .navigationTitle(project.name)
@@ -425,13 +449,26 @@ private struct WarningBanner: View {
 
 private struct BranchTable: View {
     let branches: [BranchRecord]
+    let remoteName: String
 
     var body: some View {
         Table(branches) {
             TableColumn("Branch") { branch in
-                Text(branch.name)
-                    .lineLimit(1)
-                    .help(branch.name)
+                if branch.tracksDifferentlyNamedBranch, let upstreamName = branch.upstreamName {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(branch.name)
+                            .lineLimit(1)
+                        Text("tracks \(remoteName)/\(upstreamName)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .help("\(branch.name) tracks \(remoteName)/\(upstreamName)")
+                } else {
+                    Text(branch.name)
+                        .lineLimit(1)
+                        .help(branch.name)
+                }
             }
             .width(min: 160, ideal: 230)
 
@@ -536,6 +573,10 @@ private struct NoProjectsView: View {
             Text(
                 "Found \(scan.gitRepositoryCount) Git repositories in \(scan.candidateDirectoryCount) folders, but none has a remote hosted on github.com."
             )
+        } actions: {
+            if !scan.skippedRepositories.isEmpty {
+                SkippedRepositoriesLabel(repositories: scan.skippedRepositories)
+            }
         }
     }
 }

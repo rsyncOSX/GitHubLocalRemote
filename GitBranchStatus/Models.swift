@@ -116,6 +116,16 @@ struct BranchRecord: Identifiable, Equatable, Sendable {
     let remoteOID: String?
     let aheadCount: Int?
     let behindCount: Int?
+    /// The configured upstream branch on the scanned remote, if any.
+    var upstreamName: String? = nil
+    /// True when the configured upstream no longer exists on the remote.
+    var upstreamIsMissing = false
+
+    /// True when the branch is compared with a remote branch of another name.
+    var tracksDifferentlyNamedBranch: Bool {
+        guard let upstreamName else { return false }
+        return upstreamName != name
+    }
 
     var localShortOID: String {
         localOID.map { String($0.prefix(8)) } ?? "—"
@@ -127,6 +137,8 @@ struct BranchRecord: Identifiable, Equatable, Sendable {
 
     var statusDetail: String {
         switch (localOID, remoteOID, status) {
+        case (.some, nil, _) where upstreamIsMissing:
+            "Tracked remote branch no longer exists"
         case (.some, nil, _):
             "Local only — not published"
         case (nil, .some, _):
@@ -173,6 +185,17 @@ struct ProjectScan: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A Git repository whose remotes could not be read, for example because Git
+/// refuses a repository with "dubious ownership".
+struct SkippedRepository: Identifiable, Equatable, Sendable {
+    let directoryURL: URL
+    let reason: String
+
+    var id: String {
+        directoryURL.standardizedFileURL.path
+    }
+}
+
 struct CatalogScan: Equatable, Sendable {
     let folderURL: URL
     let candidateDirectoryCount: Int
@@ -180,6 +203,34 @@ struct CatalogScan: Equatable, Sendable {
     let githubRepositoryCount: Int
     let projects: [ProjectScan]
     let scannedAt: Date
+    var skippedRepositories: [SkippedRepository] = []
+
+    /// Applies a partial result from a rescan of the same folder to the
+    /// previous catalog, so projects not yet rescanned stay visible (and
+    /// selectable) until the scan finishes.
+    static func merging(_ partial: CatalogScan, into previous: CatalogScan?) -> CatalogScan {
+        guard let previous, previous.folderURL == partial.folderURL else {
+            return partial
+        }
+
+        let rescanned = Dictionary(
+            partial.projects.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let previousIDs = Set(previous.projects.map(\.id))
+        let projects = previous.projects.map { rescanned[$0.id] ?? $0 }
+            + partial.projects.filter { !previousIDs.contains($0.id) }
+
+        return CatalogScan(
+            folderURL: partial.folderURL,
+            candidateDirectoryCount: partial.candidateDirectoryCount,
+            gitRepositoryCount: partial.gitRepositoryCount,
+            githubRepositoryCount: partial.githubRepositoryCount,
+            projects: projects,
+            scannedAt: partial.scannedAt,
+            skippedRepositories: partial.skippedRepositories
+        )
+    }
 }
 
 struct GitHubRemote: Equatable, Sendable {

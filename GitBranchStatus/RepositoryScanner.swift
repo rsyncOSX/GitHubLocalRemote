@@ -2,12 +2,15 @@ import Foundation
 
 enum RepositoryScannerError: LocalizedError, Sendable {
     case cannotReadFolder(String)
+    case gitUnavailable(String)
     case malformedReferenceOutput(String)
 
     var errorDescription: String? {
         switch self {
         case let .cannotReadFolder(path):
             "The folder could not be read: \(path)"
+        case let .gitUnavailable(message):
+            "Git could not be run, so no repositories were checked. \(message)"
         case let .malformedReferenceOutput(line):
             "Git returned an unexpected branch record: \(line)"
         }
@@ -37,6 +40,21 @@ struct RepositoryScanner: Sendable {
         let remoteName: String
         let remote: GitHubRemote
     }
+
+    private enum RemoteLookup {
+        case github(name: String, remote: GitHubRemote)
+        case notGitHub
+        case failed(String)
+    }
+
+    private struct LocalBranch {
+        let oid: String
+        /// The upstream branch name on the scanned remote, when one is configured.
+        let upstreamBranch: String?
+    }
+
+    /// Bounds the one-time `git --version` check that precedes a scan.
+    private static let gitAvailabilityTimeout: Duration = .seconds(20)
 
     private let git: GitCommandRunner
     private let policy: RepositoryScanPolicy
@@ -93,7 +111,10 @@ struct RepositoryScanner: Sendable {
             throw RepositoryScannerError.cannotReadFolder(folderURL.path)
         }
 
-        var candidateDirectories: [URL] = []
+        try await verifyGitIsAvailable(in: folderURL)
+
+        var candidateDirectoryCount = 0
+        var gitRepositories: [URL] = []
         while let descendant = descendants.nextObject() as? URL {
             try Task.checkCancellation()
 
@@ -106,39 +127,47 @@ struct RepositoryScanner: Sendable {
                 continue
             }
 
-            candidateDirectories.append(descendant)
+            candidateDirectoryCount += 1
+
+            var isDirectory: ObjCBool = false
+            let gitPath = descendant.appendingPathComponent(".git").path
+            if fileManager.fileExists(atPath: gitPath, isDirectory: &isDirectory),
+               isDirectory.boolValue
+            {
+                gitRepositories.append(descendant)
+                // A repository's working tree (build output, dependencies,
+                // vendored checkouts) is not searched for further projects.
+                descendants.skipDescendants()
+            }
         }
-        candidateDirectories.sort {
+        gitRepositories.sort {
             $0.path.localizedStandardCompare($1.path) == .orderedAscending
         }
 
-        let gitRepositories = candidateDirectories.filter { directory in
-            var isDirectory: ObjCBool = false
-            let gitPath = directory.appendingPathComponent(".git").path
-            return fileManager.fileExists(atPath: gitPath, isDirectory: &isDirectory) && isDirectory.boolValue
-        }
-
         var qualifiedRepositories: [QualifiedRepository] = []
+        var skippedRepositories: [SkippedRepository] = []
         for repositoryURL in gitRepositories {
             try Task.checkCancellation()
 
-            guard let remote = try await githubRemote(in: repositoryURL) else {
-                continue
-            }
-            qualifiedRepositories.append(
-                QualifiedRepository(
-                    url: repositoryURL,
-                    remoteName: remote.name,
-                    remote: remote.remote
+            switch try await githubRemote(in: repositoryURL) {
+            case let .github(name, remote):
+                qualifiedRepositories.append(
+                    QualifiedRepository(url: repositoryURL, remoteName: name, remote: remote)
                 )
-            )
+            case .notGitHub:
+                continue
+            case let .failed(reason):
+                skippedRepositories.append(
+                    SkippedRepository(directoryURL: repositoryURL, reason: reason)
+                )
+            }
         }
 
         await progress(
             .foundRepositories(
                 githubRepositoryCount: qualifiedRepositories.count,
                 gitRepositoryCount: gitRepositories.count,
-                candidateDirectoryCount: candidateDirectories.count
+                candidateDirectoryCount: candidateDirectoryCount
             )
         )
         await Task.yield()
@@ -165,10 +194,11 @@ struct RepositoryScanner: Sendable {
             await update(
                 catalogScan(
                     folderURL: folderURL,
-                    candidateDirectoryCount: candidateDirectories.count,
+                    candidateDirectoryCount: candidateDirectoryCount,
                     gitRepositoryCount: gitRepositories.count,
                     githubRepositoryCount: qualifiedRepositories.count,
-                    projects: projects
+                    projects: projects,
+                    skippedRepositories: skippedRepositories
                 )
             )
 
@@ -184,10 +214,11 @@ struct RepositoryScanner: Sendable {
 
         return catalogScan(
             folderURL: folderURL,
-            candidateDirectoryCount: candidateDirectories.count,
+            candidateDirectoryCount: candidateDirectoryCount,
             gitRepositoryCount: gitRepositories.count,
             githubRepositoryCount: qualifiedRepositories.count,
-            projects: projects
+            projects: projects,
+            skippedRepositories: skippedRepositories
         )
     }
 
@@ -196,7 +227,8 @@ struct RepositoryScanner: Sendable {
         candidateDirectoryCount: Int,
         gitRepositoryCount: Int,
         githubRepositoryCount: Int,
-        projects: [ProjectScan]
+        projects: [ProjectScan],
+        skippedRepositories: [SkippedRepository]
     ) -> CatalogScan {
         CatalogScan(
             folderURL: folderURL,
@@ -204,18 +236,37 @@ struct RepositoryScanner: Sendable {
             gitRepositoryCount: gitRepositoryCount,
             githubRepositoryCount: githubRepositoryCount,
             projects: projects,
-            scannedAt: Date()
+            scannedAt: Date(),
+            skippedRepositories: skippedRepositories
         )
     }
 
-    private func githubRemote(in repositoryURL: URL) async throws -> (name: String, remote: GitHubRemote)? {
+    /// Fails the scan up front when Git itself cannot run (for example when
+    /// the Command Line Tools are not installed), instead of silently
+    /// reporting that no GitHub projects exist.
+    private func verifyGitIsAvailable(in folderURL: URL) async throws {
+        do {
+            _ = try await git.run(
+                ["--version"],
+                in: folderURL,
+                timeout: Self.gitAvailabilityTimeout
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw RepositoryScannerError.gitUnavailable(error.localizedDescription)
+        }
+    }
+
+    private func githubRemote(in repositoryURL: URL) async throws -> RemoteLookup {
         let namesOutput: String
         do {
             namesOutput = try await git.run(["remote"], in: repositoryURL).output
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            return nil
+            // For example Git's "dubious ownership" check on external drives.
+            return .failed(error.localizedDescription)
         }
 
         let names = namesOutput
@@ -232,19 +283,19 @@ struct RepositoryScanner: Sendable {
             }
 
         for name in names {
-                let remoteURL: String
-                do {
-                    remoteURL = try await git.run(["remote", "get-url", name], in: repositoryURL).output
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    continue
-                }
-                guard let githubRemote = GitHubRemote.parse(remoteURL) else { continue }
-                return (name, githubRemote)
+            let remoteURL: String
+            do {
+                remoteURL = try await git.run(["remote", "get-url", name], in: repositoryURL).output
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
             }
+            guard let githubRemote = GitHubRemote.parse(remoteURL) else { continue }
+            return .github(name: name, remote: githubRemote)
+        }
 
-        return nil
+        return .notGitHub
     }
 
     private func scanRepository(
@@ -255,7 +306,9 @@ struct RepositoryScanner: Sendable {
         let warning: String?
         do {
             let fetchResult = try await git.run(
-                ["fetch", "--prune", "--quiet", remoteName],
+                // Automatic gc/maintenance is disabled so that a fetch killed at
+                // its deadline cannot leave lock files in the user's repository.
+                ["fetch", "--prune", "--quiet", "--no-auto-maintenance", remoteName],
                 in: repositoryURL,
                 allowFailure: true,
                 timeout: policy.fetchTimeout
@@ -280,38 +333,92 @@ struct RepositoryScanner: Sendable {
         }
 
         do {
-            let localReferences = try await references(
-                arguments: ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads/"],
+            let remotePrefix = "refs/remotes/\(remoteName)/"
+            let localBranches = try await references(
+                arguments: [
+                    "for-each-ref",
+                    // The full refname is used: the short form becomes
+                    // "heads/<name>" when a tag shares the branch name.
+                    "--format=%(refname)%09%(upstream)%09%(objectname)",
+                    "refs/heads/",
+                ],
+                fieldCount: 3,
                 in: repositoryURL
             )
+            .reduce(into: [String: LocalBranch]()) { branches, fields in
+                let upstream = fields[1]
+                branches[Self.removing("refs/heads/", from: fields[0])] = LocalBranch(
+                    oid: fields[2],
+                    upstreamBranch: upstream.hasPrefix(remotePrefix)
+                        ? Self.removing(remotePrefix, from: upstream)
+                        : nil
+                )
+            }
             let remoteReferences = try await references(
                 arguments: [
                     "for-each-ref",
                     "--format=%(refname)%09%(objectname)",
-                    "refs/remotes/\(remoteName)/",
+                    remotePrefix,
                 ],
-                in: repositoryURL,
-                removingPrefix: "refs/remotes/\(remoteName)/"
+                fieldCount: 2,
+                in: repositoryURL
             )
-            .filter { $0.key != "HEAD" }
-
-            let branchNames = Set(localReferences.keys)
-                .union(remoteReferences.keys)
-                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .reduce(into: [String: String]()) { references, fields in
+                let name = Self.removing(remotePrefix, from: fields[0])
+                if name != "HEAD" {
+                    references[name] = fields[1]
+                }
+            }
 
             var branches: [BranchRecord] = []
             var comparisonWarnings: [String] = []
-            for branchName in branchNames {
+            var pairedRemoteBranches = Set<String>()
+
+            let localNames = localBranches.keys
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            for name in localNames {
+                let local = localBranches[name]!
+                // A configured upstream on this remote wins; otherwise the
+                // remote branch with the same name is the counterpart.
+                let remoteBranch = local.upstreamBranch ?? name
+                let remoteOID = remoteReferences[remoteBranch]
+                if remoteOID != nil {
+                    pairedRemoteBranches.insert(remoteBranch)
+                }
                 let comparison = try await compare(
-                    branchName: branchName,
-                    localOID: localReferences[branchName],
-                    remoteOID: remoteReferences[branchName],
+                    id: "\(repositoryURL.standardizedFileURL.path)#\(name)",
+                    branchName: name,
+                    upstreamName: local.upstreamBranch,
+                    upstreamIsMissing: local.upstreamBranch != nil && remoteOID == nil,
+                    localOID: local.oid,
+                    remoteOID: remoteOID,
                     repositoryURL: repositoryURL
                 )
                 branches.append(comparison.branch)
                 if let warning = comparison.warning {
                     comparisonWarnings.append(warning)
                 }
+            }
+
+            for (name, remoteOID) in remoteReferences where !pairedRemoteBranches.contains(name) {
+                let comparison = try await compare(
+                    id: "\(repositoryURL.standardizedFileURL.path)#\(remoteName)/\(name)",
+                    branchName: name,
+                    upstreamName: nil,
+                    upstreamIsMissing: false,
+                    localOID: nil,
+                    remoteOID: remoteOID,
+                    repositoryURL: repositoryURL
+                )
+                branches.append(comparison.branch)
+            }
+            branches.sort { lhs, rhs in
+                let order = lhs.name.localizedStandardCompare(rhs.name)
+                if order != .orderedSame {
+                    return order == .orderedAscending
+                }
+                // Local branches precede a remote-only branch of the same name.
+                return lhs.localOID != nil && rhs.localOID == nil
             }
 
             return ProjectScan(
@@ -352,36 +459,39 @@ struct RepositoryScanner: Sendable {
 
     private func references(
         arguments: [String],
-        in repositoryURL: URL,
-        removingPrefix prefix: String? = nil
-    ) async throws -> [String: String] {
+        fieldCount: Int,
+        in repositoryURL: URL
+    ) async throws -> [[String]] {
         let output = try await git.run(arguments, in: repositoryURL).output
-        guard !output.isEmpty else { return [:] }
+        guard !output.isEmpty else { return [] }
 
         return try output
             .split(whereSeparator: \.isNewline)
-            .reduce(into: [String: String]()) { references, rawLine in
-                let fields = rawLine.split(separator: "\t", maxSplits: 1).map(String.init)
-                guard fields.count == 2 else {
+            .map { rawLine in
+                // Empty fields (an unset upstream) are significant.
+                let fields = rawLine
+                    .split(separator: "\t", omittingEmptySubsequences: false)
+                    .map(String.init)
+                guard fields.count == fieldCount, !fields[0].isEmpty, !fields[fieldCount - 1].isEmpty else {
                     throw RepositoryScannerError.malformedReferenceOutput(String(rawLine))
                 }
-
-                var name = fields[0]
-                if let prefix, name.hasPrefix(prefix) {
-                    name.removeFirst(prefix.count)
-                }
-                references[name] = fields[1]
+                return fields
             }
     }
 
+    private static func removing(_ prefix: String, from value: String) -> String {
+        value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : value
+    }
+
     private func compare(
+        id: String,
         branchName: String,
+        upstreamName: String?,
+        upstreamIsMissing: Bool,
         localOID: String?,
         remoteOID: String?,
         repositoryURL: URL
     ) async throws -> (branch: BranchRecord, warning: String?) {
-        let id = "\(repositoryURL.standardizedFileURL.path)#\(branchName)"
-
         switch (localOID, remoteOID) {
         case let (.some(local), .some(remote)):
             do {
@@ -398,7 +508,8 @@ struct RepositoryScanner: Sendable {
                         localOID: local,
                         remoteOID: remote,
                         aheadCount: counts.ahead,
-                        behindCount: counts.behind
+                        behindCount: counts.behind,
+                        upstreamName: upstreamName
                     ),
                     nil
                 )
@@ -413,7 +524,8 @@ struct RepositoryScanner: Sendable {
                         localOID: local,
                         remoteOID: remote,
                         aheadCount: nil,
-                        behindCount: nil
+                        behindCount: nil,
+                        upstreamName: upstreamName
                     ),
                     "Could not compare \(branchName): \(error.localizedDescription)"
                 )
@@ -427,7 +539,9 @@ struct RepositoryScanner: Sendable {
                     localOID: local,
                     remoteOID: nil,
                     aheadCount: nil,
-                    behindCount: nil
+                    behindCount: nil,
+                    upstreamName: upstreamName,
+                    upstreamIsMissing: upstreamIsMissing
                 ),
                 nil
             )

@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/rsyncOSX/ProcessGit",
       "state" : {
-        "revision" : "df62f7d865860f1049c7168d7de6dbe92f0c7ccd",
-        "version" : "1.1.0"
+        "revision" : "2ab0d05ece8d43e511a3fddc8d8d81b996920220",
+        "version" : "1.1.5"
       }
     }
   ],

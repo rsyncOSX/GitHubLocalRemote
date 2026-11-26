@@ -60,7 +60,10 @@ final class AppModel {
                         guard !Task.isCancelled,
                               self.scanGeneration == generation
                         else { return }
-                        self.catalogScan = partialResult
+                        self.catalogScan = CatalogScan.merging(
+                            partialResult,
+                            into: self.catalogScan
+                        )
                         if self.selectedProjectID == nil {
                             self.selectedProjectID = partialResult.projects.first?.id
                         }

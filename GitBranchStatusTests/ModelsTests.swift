@@ -452,6 +452,302 @@ struct ModelsTests {
         #expect(GitHubRemote.parse("") == nil)
     }
 
+    // MARK: - Review fixes
+
+    @MainActor
+    @Test
+    func testBranchSharingANameWithATagIsMatchedWithItsRemote() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusTagName-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let repositoryURL = rootURL.appendingPathComponent("Repository")
+        let git = try await Self.createCommittedGitHubRepository(at: repositoryURL)
+
+        _ = try await git.run(["branch", "release"], in: repositoryURL)
+        _ = try await git.run(["update-ref", "refs/tags/release", "HEAD"], in: repositoryURL)
+        _ = try await git.run(["update-ref", "refs/remotes/origin/release", "HEAD"], in: repositoryURL)
+
+        let result = try await RepositoryScanner(fetchTimeout: .milliseconds(10))
+            .scan(folderURL: rootURL, progress: { _ in })
+
+        let branches = try #require(result.projects.first).branches
+        let release = branches.filter { $0.name.hasSuffix("release") }
+        #expect(release.map(\.name) == ["release"])
+        #expect(release.first?.status == .inSync)
+    }
+
+    @MainActor
+    @Test
+    func testBranchIsComparedWithItsConfiguredUpstream() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusUpstream-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let repositoryURL = rootURL.appendingPathComponent("Repository")
+        let git = try await Self.createCommittedGitHubRepository(at: repositoryURL)
+
+        // "feature" tracks origin/topic; origin/feature does not exist.
+        _ = try await git.run(["branch", "feature"], in: repositoryURL)
+        _ = try await git.run(["update-ref", "refs/remotes/origin/topic", "HEAD"], in: repositoryURL)
+        _ = try await git.run(["config", "branch.feature.remote", "origin"], in: repositoryURL)
+        _ = try await git.run(["config", "branch.feature.merge", "refs/heads/topic"], in: repositoryURL)
+
+        // "stale" tracks origin/gone, which has been deleted.
+        _ = try await git.run(["branch", "stale"], in: repositoryURL)
+        _ = try await git.run(["config", "branch.stale.remote", "origin"], in: repositoryURL)
+        _ = try await git.run(["config", "branch.stale.merge", "refs/heads/gone"], in: repositoryURL)
+
+        let result = try await RepositoryScanner(fetchTimeout: .milliseconds(10))
+            .scan(folderURL: rootURL, progress: { _ in })
+        let branches = try #require(result.projects.first).branches
+
+        let feature = try #require(branches.first { $0.name == "feature" })
+        #expect(feature.status == .inSync)
+        #expect(feature.upstreamName == "topic")
+        #expect(feature.tracksDifferentlyNamedBranch)
+        #expect(!branches.contains { $0.name == "topic" }, "origin/topic is paired, not remote-only")
+
+        let stale = try #require(branches.first { $0.name == "stale" })
+        #expect(stale.remoteOID == nil)
+        #expect(stale.upstreamIsMissing)
+        #expect(stale.statusDetail == "Tracked remote branch no longer exists")
+        #expect(Set(branches.map(\.id)).count == branches.count)
+    }
+
+    @MainActor
+    @Test
+    func testRemoteOnlyBranchWithALocalNameIsKeptSeparate() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusSameName-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let repositoryURL = rootURL.appendingPathComponent("Repository")
+        let git = try await Self.createCommittedGitHubRepository(at: repositoryURL)
+
+        // Local "work" tracks origin/other, so origin/work is a separate remote-only branch.
+        _ = try await git.run(["branch", "work"], in: repositoryURL)
+        _ = try await git.run(["update-ref", "refs/remotes/origin/other", "HEAD"], in: repositoryURL)
+        _ = try await git.run(["update-ref", "refs/remotes/origin/work", "HEAD"], in: repositoryURL)
+        _ = try await git.run(["config", "branch.work.remote", "origin"], in: repositoryURL)
+        _ = try await git.run(["config", "branch.work.merge", "refs/heads/other"], in: repositoryURL)
+
+        let result = try await RepositoryScanner(fetchTimeout: .milliseconds(10))
+            .scan(folderURL: rootURL, progress: { _ in })
+        let work = try #require(result.projects.first).branches.filter { $0.name == "work" }
+
+        #expect(work.count == 2)
+        #expect(work.first?.localOID != nil)
+        #expect(work.last?.localOID == nil)
+        #expect(Set(work.map(\.id)).count == 2)
+    }
+
+    @Test
+    func testRescanKeepsProjectsThatAreNotYetRescanned() {
+        let folderURL = URL(fileURLWithPath: "/tmp/Projects")
+        let previous = Self.catalog(folderURL, projects: [
+            Self.project("A", warning: "old"),
+            Self.project("B", warning: "old"),
+        ])
+        let partial = Self.catalog(folderURL, projects: [Self.project("A", warning: "new")])
+
+        let merged = CatalogScan.merging(partial, into: previous)
+        #expect(merged.projects.map(\.name) == ["A", "B"])
+        #expect(merged.projects.map(\.warning) == ["new", "old"])
+
+        let otherFolder = Self.catalog(URL(fileURLWithPath: "/tmp/Other"), projects: [Self.project("C")])
+        #expect(CatalogScan.merging(otherFolder, into: previous).projects.map(\.name) == ["C"])
+        #expect(CatalogScan.merging(partial, into: nil).projects.map(\.name) == ["A"])
+    }
+
+    @MainActor
+    @Test
+    func testRescanDoesNotHideTheSelectedProject() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusRescan-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try Self.createSyntheticRepository(named: "First", in: rootURL)
+        try Self.createSyntheticRepository(named: "Second", in: rootURL)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        let releaseURL = rootURL.appendingPathComponent("release")
+        // Fetching "Second" waits until the test creates the release file.
+        try Self.writeExecutable(to: scriptURL, script: """
+        #!/bin/sh
+        if [ "$1" = "remote" ]; then
+            if [ "$2" = "get-url" ]; then echo "https://github.com/example/repo.git"; else echo "origin"; fi
+            exit 0
+        fi
+        if [ "$1" = "fetch" ]; then
+            case "$PWD" in *Second) while [ ! -f "\(releaseURL.path)" ]; do /bin/sleep 0.02; done ;; esac
+        fi
+        exit 0
+        """)
+        try "".write(to: releaseURL, atomically: true, encoding: .utf8)
+
+        let model = AppModel(scanner: RepositoryScanner(
+            policy: RepositoryScanPolicy(fetchTimeout: .seconds(10)),
+            git: GitCommandRunner(executableURL: scriptURL)
+        ))
+        model.selectFolder(rootURL)
+        try await waitUntil(timeout: .seconds(5)) { model.phase == .loaded }
+        let secondID = try #require(model.catalogScan?.projects.last?.id)
+        model.selectedProjectID = secondID
+
+        try FileManager.default.removeItem(at: releaseURL)
+        model.rescan()
+        try await waitUntil(timeout: .seconds(5)) {
+            model.scanProgress == .checking(repositoryName: "Second", number: 2, total: 2)
+        }
+
+        #expect(model.catalogScan?.projects.map(\.name) == ["First", "Second"])
+        #expect(model.selectedProject?.id == secondID)
+
+        try "".write(to: releaseURL, atomically: true, encoding: .utf8)
+        try await waitUntil(timeout: .seconds(5)) { model.phase == .loaded }
+        #expect(model.selectedProject?.id == secondID)
+    }
+
+    @MainActor
+    @Test
+    func testFetchDisablesAutomaticMaintenance() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusFetchArgs-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try Self.createSyntheticRepository(named: "Repository", in: rootURL)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        let logURL = rootURL.appendingPathComponent("fetch.args")
+        try Self.writeExecutable(to: scriptURL, script: """
+        #!/bin/sh
+        if [ "$1" = "remote" ]; then
+            if [ "$2" = "get-url" ]; then echo "https://github.com/example/repo.git"; else echo "origin"; fi
+            exit 0
+        fi
+        if [ "$1" = "fetch" ]; then echo "$@" > "\(logURL.path)"; fi
+        exit 0
+        """)
+
+        _ = try await RepositoryScanner(
+            policy: RepositoryScanPolicy(fetchTimeout: .seconds(10)),
+            git: GitCommandRunner(executableURL: scriptURL)
+        ).scan(folderURL: rootURL, progress: { _ in })
+
+        let arguments = try String(contentsOf: logURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(arguments == "fetch --prune --quiet --no-auto-maintenance origin")
+    }
+
+    @MainActor
+    @Test
+    func testMissingGitFailsTheScanInsteadOfFindingNothing() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusNoGit-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try Self.createSyntheticRepository(named: "Repository", in: rootURL)
+
+        let scanner = RepositoryScanner(
+            policy: .standard,
+            git: GitCommandRunner(executableURL: rootURL.appendingPathComponent("missing-git"))
+        )
+        do {
+            _ = try await scanner.scan(folderURL: rootURL, progress: { _ in })
+            Issue.record("Expected the scan to fail")
+        } catch let error as RepositoryScannerError {
+            guard case .gitUnavailable = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+        }
+    }
+
+    @MainActor
+    @Test
+    func testRepositoryGitRefusesIsReportedAsSkipped() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusSkipped-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try Self.createSyntheticRepository(named: "Repository", in: rootURL)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        try Self.writeExecutable(to: scriptURL, script: """
+        #!/bin/sh
+        if [ "$1" = "remote" ]; then
+            echo "fatal: detected dubious ownership in repository" >&2
+            exit 128
+        fi
+        exit 0
+        """)
+
+        let result = try await RepositoryScanner(
+            policy: .standard,
+            git: GitCommandRunner(executableURL: scriptURL)
+        ).scan(folderURL: rootURL, progress: { _ in })
+
+        #expect(result.projects.isEmpty)
+        #expect(result.gitRepositoryCount == 1)
+        #expect(result.skippedRepositories.map(\.directoryURL.lastPathComponent) == ["Repository"])
+        #expect(result.skippedRepositories.first?.reason.contains("dubious ownership") == true)
+    }
+
+    @MainActor
+    @Test
+    func testScannerDoesNotSearchInsideRepositories() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusNoDescend-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let repositoryURL = rootURL.appendingPathComponent("Outer")
+        try await Self.createGitHubRepository(at: repositoryURL)
+        try FileManager.default.createDirectory(
+            at: repositoryURL.appendingPathComponent("node_modules/pkg/Inner/.git"),
+            withIntermediateDirectories: true
+        )
+
+        let result = try await RepositoryScanner(fetchTimeout: .milliseconds(10))
+            .scan(folderURL: rootURL, progress: { _ in })
+
+        #expect(result.candidateDirectoryCount == 1)
+        #expect(result.gitRepositoryCount == 1)
+        #expect(result.projects.map(\.name) == ["Outer"])
+    }
+
+    private static func catalog(_ folderURL: URL, projects: [ProjectScan]) -> CatalogScan {
+        CatalogScan(
+            folderURL: folderURL,
+            candidateDirectoryCount: projects.count,
+            gitRepositoryCount: projects.count,
+            githubRepositoryCount: projects.count,
+            projects: projects,
+            scannedAt: Date()
+        )
+    }
+
+    private static func project(_ name: String, warning: String? = nil) -> ProjectScan {
+        ProjectScan(
+            id: "/tmp/Projects/\(name)",
+            name: name,
+            directoryURL: URL(fileURLWithPath: "/tmp/Projects/\(name)"),
+            remoteName: "origin",
+            remoteWebURL: URL(string: "https://github.com/example/\(name)")!,
+            branches: [],
+            fetchedAt: Date(),
+            warning: warning
+        )
+    }
+
+    private static func createSyntheticRepository(named name: String, in folderURL: URL) throws {
+        try FileManager.default.createDirectory(
+            at: folderURL.appendingPathComponent(name).appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+    }
+
+    private static func writeExecutable(to url: URL, script: String) throws {
+        try script.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private static func createCommittedGitHubRepository(at repositoryURL: URL) async throws -> GitCommandRunner {
+        try await createGitHubRepository(at: repositoryURL)
+        let git = GitCommandRunner()
+        _ = try await git.run(["config", "user.email", "tests@example.com"], in: repositoryURL)
+        _ = try await git.run(["config", "user.name", "Tests"], in: repositoryURL)
+        _ = try await git.run(
+            ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "--quiet", "-m", "Initial"],
+            in: repositoryURL
+        )
+        return git
+    }
+
     private func makeTemporaryDirectory(prefix: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)\(UUID().uuidString)")

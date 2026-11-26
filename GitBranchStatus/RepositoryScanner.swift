@@ -1,4 +1,5 @@
 import Foundation
+import ProcessGit
 
 enum RepositoryScannerError: LocalizedError, Sendable {
     case cannotReadFolder(String)
@@ -34,6 +35,66 @@ struct RepositoryScanPolicy: Sendable {
     let fetchTimeout: Duration
 }
 
+/// Resolves an SSH host alias (for example `github.com-work` from
+/// `~/.ssh/config`) to the host name SSH would actually connect to.
+struct SSHHostResolver: Sendable {
+    static let system = SSHHostResolver()
+
+    private let executableURL: URL
+    private let configFileURL: URL?
+
+    init(
+        executableURL: URL = URL(fileURLWithPath: "/usr/bin/ssh"),
+        configFileURL: URL? = nil
+    ) {
+        self.executableURL = executableURL
+        self.configFileURL = configFileURL
+    }
+
+    /// Returns the lowercased `HostName` for `alias`, or `nil` when it cannot be
+    /// resolved. `ssh -G` only evaluates configuration; it never connects.
+    func hostName(for alias: String) async throws -> String? {
+        // The alias comes from a repository's remote URL. Restricting it to
+        // host-name characters keeps it from being read as an ssh option.
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_")
+        guard !alias.isEmpty,
+              !alias.hasPrefix("-"),
+              alias.unicodeScalars.allSatisfy(allowed.contains)
+        else {
+            return nil
+        }
+
+        var arguments = ["-G"]
+        if let configFileURL {
+            arguments += ["-F", configFileURL.path]
+        }
+        arguments += ["--", alias]
+
+        let result: ProcessGitResult
+        do {
+            result = try await ProcessGit(
+                executableURL: executableURL,
+                arguments: arguments
+            ).run(timeout: .seconds(5))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+        guard result.exitCode == 0 else { return nil }
+
+        return String(decoding: result.standardOutput, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .lazy
+            .compactMap { line -> String? in
+                let fields = line.split(separator: " ", maxSplits: 1)
+                guard fields.count == 2, fields[0].lowercased() == "hostname" else { return nil }
+                return fields[1].trimmingCharacters(in: .whitespaces).lowercased()
+            }
+            .first
+    }
+}
+
 struct RepositoryScanner: Sendable {
     private struct QualifiedRepository {
         let url: URL
@@ -58,13 +119,16 @@ struct RepositoryScanner: Sendable {
 
     private let git: GitCommandRunner
     private let policy: RepositoryScanPolicy
+    private let sshHostResolver: SSHHostResolver
 
     init(
         policy: RepositoryScanPolicy = .standard,
-        git: GitCommandRunner = GitCommandRunner()
+        git: GitCommandRunner = GitCommandRunner(),
+        sshHostResolver: SSHHostResolver = .system
     ) {
         self.policy = policy
         self.git = git
+        self.sshHostResolver = sshHostResolver
     }
 
     init(fetchTimeout: Duration, git: GitCommandRunner = GitCommandRunner()) {
@@ -115,7 +179,14 @@ struct RepositoryScanner: Sendable {
 
         var candidateDirectoryCount = 0
         var gitRepositories: [URL] = []
-        while let descendant = descendants.nextObject() as? URL {
+        // When the chosen folder is itself a project it is the only one: like
+        // any other repository, its working tree is not searched further.
+        let folderIsRepository = Self.isRepository(folderURL)
+        if folderIsRepository {
+            candidateDirectoryCount = 1
+            gitRepositories = [folderURL]
+        }
+        while !folderIsRepository, let descendant = descendants.nextObject() as? URL {
             try Task.checkCancellation()
 
             guard let values = try? descendant.resourceValues(
@@ -129,11 +200,7 @@ struct RepositoryScanner: Sendable {
 
             candidateDirectoryCount += 1
 
-            var isDirectory: ObjCBool = false
-            let gitPath = descendant.appendingPathComponent(".git").path
-            if fileManager.fileExists(atPath: gitPath, isDirectory: &isDirectory),
-               isDirectory.boolValue
-            {
+            if Self.isRepository(descendant) {
                 gitRepositories.append(descendant)
                 // A repository's working tree (build output, dependencies,
                 // vendored checkouts) is not searched for further projects.
@@ -146,10 +213,11 @@ struct RepositoryScanner: Sendable {
 
         var qualifiedRepositories: [QualifiedRepository] = []
         var skippedRepositories: [SkippedRepository] = []
+        var resolvedSSHHosts: [String: String?] = [:]
         for repositoryURL in gitRepositories {
             try Task.checkCancellation()
 
-            switch try await githubRemote(in: repositoryURL) {
+            switch try await githubRemote(in: repositoryURL, resolvedHosts: &resolvedSSHHosts) {
             case let .github(name, remote):
                 qualifiedRepositories.append(
                     QualifiedRepository(url: repositoryURL, remoteName: name, remote: remote)
@@ -241,6 +309,35 @@ struct RepositoryScanner: Sendable {
         )
     }
 
+    private static func isRepository(_ directory: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        let gitPath = directory.appendingPathComponent(".git").path
+        return FileManager.default.fileExists(atPath: gitPath, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+    }
+
+    /// Fetch must never prompt. Batch-mode SSH is only imposed when the user
+    /// has not chosen an SSH command, because `GIT_SSH_COMMAND` would also
+    /// override a repository's `core.sshCommand` (such as a per-project key).
+    private func fetchEnvironment(in repositoryURL: URL) async throws -> [String: String] {
+        guard !git.usesCustomSSHCommand else { return [:] }
+        do {
+            let configured = try await git.run(
+                ["config", "--get", "core.sshCommand"],
+                in: repositoryURL,
+                allowFailure: true
+            ).output
+            if !configured.isEmpty {
+                return [:]
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Fall through to the batch-mode default.
+        }
+        return ["GIT_SSH_COMMAND": GitCommandRunner.nonInteractiveSSHCommand]
+    }
+
     /// Fails the scan up front when Git itself cannot run (for example when
     /// the Command Line Tools are not installed), instead of silently
     /// reporting that no GitHub projects exist.
@@ -258,7 +355,10 @@ struct RepositoryScanner: Sendable {
         }
     }
 
-    private func githubRemote(in repositoryURL: URL) async throws -> RemoteLookup {
+    private func githubRemote(
+        in repositoryURL: URL,
+        resolvedHosts: inout [String: String?]
+    ) async throws -> RemoteLookup {
         let namesOutput: String
         do {
             namesOutput = try await git.run(["remote"], in: repositoryURL).output
@@ -291,7 +391,21 @@ struct RepositoryScanner: Sendable {
             } catch {
                 continue
             }
-            guard let githubRemote = GitHubRemote.parse(remoteURL) else { continue }
+            // An SSH host alias such as "github.com-work" is resolved through
+            // the user's SSH configuration; results are cached per scan.
+            var resolvedHost: String?
+            if let alias = GitHubRemote.sshHost(of: remoteURL), !GitHubRemote.isGitHubHost(alias) {
+                if let cached = resolvedHosts[alias] {
+                    resolvedHost = cached
+                } else {
+                    resolvedHost = try await sshHostResolver.hostName(for: alias)
+                    resolvedHosts[alias] = .some(resolvedHost)
+                }
+            }
+            // parse only consults the resolver for this remote's SSH host.
+            guard let githubRemote = GitHubRemote.parse(remoteURL, resolveSSHHost: { _ in resolvedHost }) else {
+                continue
+            }
             return .github(name: name, remote: githubRemote)
         }
 
@@ -304,6 +418,7 @@ struct RepositoryScanner: Sendable {
         remote: GitHubRemote
     ) async throws -> ProjectScan {
         let warning: String?
+        let environment = try await fetchEnvironment(in: repositoryURL)
         do {
             let fetchResult = try await git.run(
                 // Automatic gc/maintenance is disabled so that a fetch killed at
@@ -311,7 +426,8 @@ struct RepositoryScanner: Sendable {
                 ["fetch", "--prune", "--quiet", "--no-auto-maintenance", remoteName],
                 in: repositoryURL,
                 allowFailure: true,
-                timeout: policy.fetchTimeout
+                timeout: policy.fetchTimeout,
+                environment: environment
             )
             warning = if fetchResult.exitCode != 0 {
                 fetchResult.errorOutput.isEmpty

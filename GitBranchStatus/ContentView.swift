@@ -259,6 +259,10 @@ private struct ProjectSidebarRow: View {
         project.warningMessage == nil && !project.branches.isEmpty && project.attentionCount == 0
     }
 
+    private var remoteOnlySuffix: String {
+        project.remoteOnlyCount == 0 ? "" : " · \(project.remoteOnlyCount) remote only"
+    }
+
     private var summary: String {
         if project.warningMessage != nil, project.branches.isEmpty {
             return "Could not read branches"
@@ -266,10 +270,12 @@ private struct ProjectSidebarRow: View {
         if project.branches.isEmpty {
             return "No branches found"
         }
+        let localCount = project.localBranchCount
         if project.attentionCount == 0 {
-            return "All \(project.branches.count) branches in sync"
+            let synced = localCount == 1 ? "Local branch in sync" : "All \(localCount) local branches in sync"
+            return localCount == 0 ? "\(project.remoteOnlyCount) remote only" : synced + remoteOnlySuffix
         }
-        return "\(project.attentionCount) of \(project.branches.count) need attention"
+        return "\(project.attentionCount) of \(localCount) local need attention" + remoteOnlySuffix
     }
 
     var body: some View {
@@ -312,7 +318,7 @@ private struct ProjectDetailView: View {
             }
 
             if visibleBranches.isEmpty {
-                ContentUnavailableView.search(text: searchText)
+                emptyState
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 BranchTable(branches: visibleBranches, remoteName: project.remoteName)
@@ -320,6 +326,34 @@ private struct ProjectDetailView: View {
         }
         .navigationTitle(project.name)
         .searchable(text: $searchText, prompt: "Filter branches")
+        // The status filter is kept while moving between projects, which helps
+        // triage, but a branch-name search belongs to one project.
+        .onChange(of: project.id) {
+            searchText = ""
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        if !searchText.isEmpty {
+            ContentUnavailableView.search(text: searchText)
+        } else if project.branches.isEmpty {
+            ContentUnavailableView(
+                "No Branches",
+                systemImage: "arrow.triangle.branch",
+                description: Text("No local or \(project.remoteName) branches were found.")
+            )
+        } else {
+            ContentUnavailableView {
+                Label("No Matching Branches", systemImage: "line.3.horizontal.decrease.circle")
+            } description: {
+                Text("None of the \(project.branches.count) branches match “\(filter.title)”.")
+            } actions: {
+                Button("Show All Branches") {
+                    filter = .all
+                }
+            }
+        }
     }
 }
 

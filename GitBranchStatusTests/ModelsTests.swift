@@ -700,6 +700,161 @@ struct ModelsTests {
         #expect(result.projects.map(\.name) == ["Outer"])
     }
 
+    // MARK: - Review fixes 7–11
+
+    @MainActor
+    @Test
+    func testFetchKeepsARepositorySSHCommandAndOtherwiseUsesBatchMode() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusSSH-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try Self.createSyntheticRepository(named: "Plain", in: rootURL)
+        try Self.createSyntheticRepository(named: "Keyed", in: rootURL)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        try Self.writeExecutable(to: scriptURL, script: """
+        #!/bin/sh
+        if [ "$1" = "remote" ]; then
+            if [ "$2" = "get-url" ]; then echo "git@github.com:example/repo.git"; else echo "origin"; fi
+            exit 0
+        fi
+        if [ "$1" = "config" ]; then
+            case "$PWD" in *Keyed) echo "ssh -i ~/.ssh/project_key" ;; *) exit 1 ;; esac
+            exit 0
+        fi
+        if [ "$1" = "fetch" ]; then
+            echo "${GIT_SSH_COMMAND-unset}" > "$PWD/ssh-command"
+        fi
+        exit 0
+        """)
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_SSH_COMMAND"] = nil
+        environment["GIT_SSH"] = nil
+        _ = try await RepositoryScanner(
+            policy: RepositoryScanPolicy(fetchTimeout: .seconds(10)),
+            git: GitCommandRunner(executableURL: scriptURL, baseEnvironment: environment)
+        ).scan(folderURL: rootURL, progress: { _ in })
+
+        func recordedCommand(_ name: String) throws -> String {
+            try String(
+                contentsOf: rootURL.appendingPathComponent(name).appendingPathComponent("ssh-command"),
+                encoding: .utf8
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        #expect(try recordedCommand("Plain") == GitCommandRunner.nonInteractiveSSHCommand)
+        #expect(try recordedCommand("Keyed") == "unset")
+    }
+
+    @MainActor
+    @Test
+    func testChosenFolderThatIsARepositoryIsScanned() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusRootRepo-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let repositoryURL = rootURL.appendingPathComponent("Project")
+        try await Self.createGitHubRepository(at: repositoryURL)
+        try FileManager.default.createDirectory(
+            at: repositoryURL.appendingPathComponent("Sources/Vendored/.git"),
+            withIntermediateDirectories: true
+        )
+
+        let result = try await RepositoryScanner(fetchTimeout: .milliseconds(10))
+            .scan(folderURL: repositoryURL, progress: { _ in })
+
+        #expect(result.projects.map(\.name) == ["Project"])
+        #expect(result.gitRepositoryCount == 1)
+        #expect(result.candidateDirectoryCount == 1)
+    }
+
+    @Test
+    func testParsesGitHubSSHHostAliases() {
+        let github: (String) -> String? = { $0 == "github.com-work" ? "github.com" : "gitlab.com" }
+
+        let scp = GitHubRemote.parse("git@github.com-work:example/repo.git", resolveSSHHost: github)
+        #expect(scp?.owner == "example")
+        #expect(scp?.repository == "repo")
+        #expect(scp?.webURL.absoluteString == "https://github.com/example/repo")
+
+        let url = GitHubRemote.parse("ssh://git@github.com-work/example/repo.git", resolveSSHHost: github)
+        #expect(url?.repository == "repo")
+
+        #expect(GitHubRemote.parse("git@github.com-work:example/repo.git") == nil)
+        #expect(GitHubRemote.parse("git@other-alias:example/repo.git", resolveSSHHost: github) == nil)
+        // Aliases apply to SSH only, never to an HTTPS host.
+        #expect(GitHubRemote.parse("https://github.com-work/example/repo", resolveSSHHost: github) == nil)
+        #expect(GitHubRemote.parse("https://www.github.com/example/repo")?.repository == "repo")
+
+        #expect(GitHubRemote.sshHost(of: "git@github.com-work:example/repo.git") == "github.com-work")
+        #expect(GitHubRemote.sshHost(of: "ssh://git@host:22/example/repo") == "host")
+        #expect(GitHubRemote.sshHost(of: "https://github.com/example/repo") == nil)
+        #expect(GitHubRemote.sshHost(of: "/Users/me/repo") == nil)
+    }
+
+    @Test
+    func testSSHHostResolverReadsTheSSHConfiguration() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusSSHConfig-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let configURL = rootURL.appendingPathComponent("config")
+        try "Host github.com-work\n    HostName github.com\n".write(to: configURL, atomically: true, encoding: .utf8)
+
+        let resolver = SSHHostResolver(configFileURL: configURL)
+        #expect(try await resolver.hostName(for: "github.com-work") == "github.com")
+        #expect(try await resolver.hostName(for: "-oProxyCommand=/usr/bin/false") == nil)
+        #expect(try await resolver.hostName(for: "host;rm") == nil)
+    }
+
+    @MainActor
+    @Test
+    func testScannerFindsRepositoriesBehindAnSSHHostAlias() async throws {
+        let rootURL = try makeTemporaryDirectory(prefix: "GitBranchStatusAliasScan-")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try Self.createSyntheticRepository(named: "Repository", in: rootURL)
+        let configURL = rootURL.appendingPathComponent("ssh-config")
+        try "Host github.com-work\n    HostName github.com\n".write(to: configURL, atomically: true, encoding: .utf8)
+
+        let scriptURL = rootURL.appendingPathComponent("git-fixture.sh")
+        try Self.writeExecutable(to: scriptURL, script: """
+        #!/bin/sh
+        if [ "$1" = "remote" ]; then
+            if [ "$2" = "get-url" ]; then echo "git@github.com-work:example/repo.git"; else echo "origin"; fi
+        fi
+        exit 0
+        """)
+
+        let result = try await RepositoryScanner(
+            policy: RepositoryScanPolicy(fetchTimeout: .seconds(10)),
+            git: GitCommandRunner(executableURL: scriptURL),
+            sshHostResolver: SSHHostResolver(configFileURL: configURL)
+        ).scan(folderURL: rootURL, progress: { _ in })
+
+        #expect(result.githubRepositoryCount == 1)
+        #expect(result.projects.first?.remoteWebURL.absoluteString == "https://github.com/example/repo")
+    }
+
+    @Test
+    func testRemoteOnlyBranchesDoNotNeedAttention() {
+        let remoteOnly = BranchRecord(
+            id: "remote", name: "dependabot/x", status: .remoteAhead,
+            localOID: nil, remoteOID: "abc", aheadCount: nil, behindCount: nil
+        )
+        let behind = BranchRecord(
+            id: "behind", name: "main", status: .remoteAhead,
+            localOID: "abc", remoteOID: "def", aheadCount: 0, behindCount: 2
+        )
+        let project = ProjectScan(
+            id: "p", name: "P", directoryURL: URL(fileURLWithPath: "/tmp/P"),
+            remoteName: "origin", remoteWebURL: URL(string: "https://github.com/e/p")!,
+            branches: [remoteOnly, behind], fetchedAt: Date(), warning: nil
+        )
+
+        #expect(!remoteOnly.needsAttention)
+        #expect(!BranchFilter.attention.includes(remoteOnly))
+        #expect(BranchFilter.remoteAhead.includes(remoteOnly))
+        #expect(behind.needsAttention)
+        #expect(project.attentionCount == 1)
+        #expect(project.localBranchCount == 1)
+        #expect(project.remoteOnlyCount == 1)
+    }
+
     private static func catalog(_ folderURL: URL, projects: [ProjectScan]) -> CatalogScan {
         CatalogScan(
             folderURL: folderURL,

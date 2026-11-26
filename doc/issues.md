@@ -89,19 +89,23 @@ assert contract values directly: output, error output, exit status, working
 directory, allowed and disallowed failures, timeout, cancellation, environment
 policy, process-tree cleanup, and high-volume concurrent stdout/stderr.
 
-### P3 — Non-interactive SSH policy overrides `GIT_SSH_COMMAND` — remains open
+### P3 — Non-interactive SSH policy overrides `GIT_SSH_COMMAND` — resolved
 
-The runner sets `GIT_SSH_COMMAND` for every Git invocation. SSH still reads the
-user's SSH configuration, but an existing environment-provided wrapper or
-custom command is replaced.
+The runner no longer sets `GIT_SSH_COMMAND` for every Git invocation. Every
+command still refuses prompts (`GIT_TERMINAL_PROMPT=0`, failing askpass
+programs, and `SSH_ASKPASS_REQUIRE=force` so ssh never reads a terminal).
+Batch-mode SSH (`ssh -oBatchMode=yes -oConnectTimeout=10`) is added only to
+fetch, and only when neither the environment (`GIT_SSH_COMMAND`, `GIT_SSH`) nor
+the repository's `core.sshCommand` already chooses an SSH command, so
+per-repository keys and custom wrappers keep working.
 
-Future work should scope network-specific overrides to fetch and explicitly
-decide whether a pre-existing `GIT_SSH_COMMAND` is preserved or intentionally
-replaced. Fetch must remain noninteractive.
+Coverage verifies that an environment-provided SSH command is preserved, that a
+repository with `core.sshCommand` fetches with it, and that other repositories
+fetch in batch mode.
 
 ## Current conclusion
 
 All P1 and P2 items recorded by this review are resolved on `version-1.0.3`.
 The scanner now has structured cancellation, stale-update isolation, bounded
 fetches, ProcessGit 1.1.0 process-tree termination, and contract-based runner
-tests. The P3 SSH environment-policy item remains open.
+tests. The P3 SSH environment-policy item has since been resolved as well.

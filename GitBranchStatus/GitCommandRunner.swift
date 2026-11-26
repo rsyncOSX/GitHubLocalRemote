@@ -26,6 +26,10 @@ enum GitCommandError: LocalizedError, Sendable {
 
 /// Applies Git-specific policy around the reusable ProcessGit executor.
 struct GitCommandRunner: Sendable {
+    /// The SSH command used for network operations when the user has not
+    /// configured one: batch mode never prompts, and a dead host fails fast.
+    static let nonInteractiveSSHCommand = "ssh -oBatchMode=yes -oConnectTimeout=10"
+
     private let executableURL: URL
     private let baseEnvironment: [String: String]
 
@@ -41,7 +45,8 @@ struct GitCommandRunner: Sendable {
         _ arguments: [String],
         in directory: URL,
         allowFailure: Bool = false,
-        timeout: Duration? = nil
+        timeout: Duration? = nil,
+        environment overrides: [String: String] = [:]
     ) async throws -> GitCommandResult {
         let processResult: ProcessGitResult
         do {
@@ -49,7 +54,10 @@ struct GitCommandRunner: Sendable {
                 executableURL: executableURL,
                 arguments: arguments,
                 currentDirectoryURL: directory,
-                environment: nonInteractiveEnvironment
+                environment: nonInteractiveEnvironment.merging(
+                    overrides,
+                    uniquingKeysWith: { _, override in override }
+                )
             ).run(timeout: timeout)
         } catch is CancellationError {
             throw CancellationError()
@@ -83,6 +91,16 @@ struct GitCommandRunner: Sendable {
         return result
     }
 
+    /// True when the environment already chooses the SSH program, which Git
+    /// then prefers over `core.sshCommand`.
+    var usesCustomSSHCommand: Bool {
+        ["GIT_SSH_COMMAND", "GIT_SSH"].contains { !(baseEnvironment[$0] ?? "").isEmpty }
+    }
+
+    /// Prompts are refused for every command. The SSH program itself is left
+    /// alone here: a user's `GIT_SSH_COMMAND` or `core.sshCommand` (for example
+    /// a per-repository key) must keep working, so network commands add
+    /// ``nonInteractiveSSHCommand`` only when neither is configured.
     private var nonInteractiveEnvironment: [String: String] {
         baseEnvironment.merging(
             [
@@ -90,7 +108,9 @@ struct GitCommandRunner: Sendable {
                 "GCM_INTERACTIVE": "Never",
                 "GIT_ASKPASS": "/usr/bin/false",
                 "SSH_ASKPASS": "/usr/bin/false",
-                "GIT_SSH_COMMAND": "/usr/bin/ssh -oBatchMode=yes -oConnectTimeout=10",
+                // Makes ssh use the failing askpass instead of a terminal, so
+                // a custom SSH command cannot wait on a passphrase prompt.
+                "SSH_ASKPASS_REQUIRE": "force",
             ],
             uniquingKeysWith: { _, nonInteractiveValue in nonInteractiveValue }
         )

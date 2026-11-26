@@ -124,12 +124,26 @@ struct GitCommandRunnerTests {
         let configuredRunner = GitCommandRunner(baseEnvironment: environment)
         let arguments = [
             "-c",
-            "alias.environment=!printf '%s|%s|%s' \"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\" \"$GIT_SSH_COMMAND\"",
+            "alias.environment=!printf '%s|%s|%s|%s' \"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\" \"$SSH_ASKPASS_REQUIRE\" \"$GIT_SSH_COMMAND\"",
             "environment",
         ]
 
         let result = try await configuredRunner.run(arguments, in: repositoryURL)
-        #expect(result.output == "0|Never|/usr/bin/ssh -oBatchMode=yes -oConnectTimeout=10")
+        // Prompts are refused, but the user's own SSH command is preserved.
+        #expect(result.output == "0|Never|force|/custom/ssh-wrapper")
+        #expect(configuredRunner.usesCustomSSHCommand)
+
+        let overridden = try await configuredRunner.run(
+            arguments,
+            in: repositoryURL,
+            environment: ["GIT_SSH_COMMAND": GitCommandRunner.nonInteractiveSSHCommand]
+        )
+        #expect(overridden.output == "0|Never|force|ssh -oBatchMode=yes -oConnectTimeout=10")
+
+        var plainEnvironment = ProcessInfo.processInfo.environment
+        plainEnvironment["GIT_SSH_COMMAND"] = nil
+        plainEnvironment["GIT_SSH"] = nil
+        #expect(!GitCommandRunner(baseEnvironment: plainEnvironment).usesCustomSSHCommand)
     }
 
     @Test

@@ -93,7 +93,7 @@ enum BranchFilter: String, CaseIterable, Identifiable {
         case .all:
             true
         case .attention:
-            branch.status != .inSync
+            branch.needsAttention
         case .localAhead:
             branch.status == .localAhead
         case .inSync:
@@ -120,6 +120,16 @@ struct BranchRecord: Identifiable, Equatable, Sendable {
     var upstreamName: String? = nil
     /// True when the configured upstream no longer exists on the remote.
     var upstreamIsMissing = false
+
+    /// A branch that exists only on the remote is someone else's work, not
+    /// something to act on locally, so it does not need attention.
+    var isRemoteOnly: Bool {
+        localOID == nil && remoteOID != nil
+    }
+
+    var needsAttention: Bool {
+        status != .inSync && !isRemoteOnly
+    }
 
     /// True when the branch is compared with a remote branch of another name.
     var tracksDifferentlyNamedBranch: Bool {
@@ -181,7 +191,15 @@ struct ProjectScan: Identifiable, Equatable, Sendable {
     }
 
     var attentionCount: Int {
-        branches.count { $0.status != .inSync }
+        branches.count(where: \.needsAttention)
+    }
+
+    var localBranchCount: Int {
+        branches.count { !$0.isRemoteOnly }
+    }
+
+    var remoteOnlyCount: Int {
+        branches.count(where: \.isRemoteOnly)
     }
 }
 
@@ -248,27 +266,68 @@ struct GitHubRemote: Equatable, Sendable {
         return components.url ?? URL(string: "https://github.com")!
     }
 
-    static func parse(_ rawValue: String) -> GitHubRemote? {
+    static func isGitHubHost(_ host: String) -> Bool {
+        let host = host.lowercased()
+        return host == "github.com" || host == "www.github.com"
+    }
+
+    /// The host an SSH remote connects to, as written in the URL; it may be an
+    /// alias defined in the user's SSH configuration. `nil` for other URLs.
+    static func sshHost(of rawValue: String) -> String? {
+        let raw = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.contains("://") {
+            guard let components = URLComponents(string: raw),
+                  let scheme = components.scheme?.lowercased(),
+                  scheme == "ssh" || scheme == "git+ssh",
+                  let host = components.host,
+                  !host.isEmpty
+            else {
+                return nil
+            }
+            return host
+        }
+
+        // SCP-style: [user@]host:path, where the host part contains no slash.
+        guard let separatorIndex = raw.firstIndex(of: ":") else { return nil }
+        let prefix = raw[..<separatorIndex]
+        guard !prefix.contains("/") else { return nil }
+        let host = prefix.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false).last
+        guard let host, !host.isEmpty else { return nil }
+        return String(host)
+    }
+
+    /// Parses a GitHub remote URL. `resolveSSHHost` maps an SSH host alias to
+    /// the host name it stands for, so `git@github.com-work:owner/repo` is
+    /// recognized when the user's SSH configuration points it at github.com.
+    static func parse(
+        _ rawValue: String,
+        resolveSSHHost: (String) -> String? = { _ in nil }
+    ) -> GitHubRemote? {
         let raw = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
 
-        if let components = URLComponents(string: raw),
-           components.host?.lowercased() == "github.com"
-        {
+        let isSSH = sshHost(of: raw) != nil
+        func isGitHub(_ host: String) -> Bool {
+            isGitHubHost(host) || (isSSH && resolveSSHHost(host).map(isGitHubHost) == true)
+        }
+
+        if raw.contains("://") {
+            guard let components = URLComponents(string: raw),
+                  let host = components.host,
+                  isGitHub(host)
+            else {
+                return nil
+            }
             return remote(fromPath: components.path, rawValue: raw)
         }
 
         // Git commonly stores SSH remotes in SCP-style form:
         // git@github.com:owner/repository.git
-        guard let separatorIndex = raw.firstIndex(of: ":") else {
+        guard let host = sshHost(of: raw), isGitHub(host),
+              let separatorIndex = raw.firstIndex(of: ":")
+        else {
             return nil
         }
-
-        let host = raw[..<separatorIndex]
-            .split(separator: "@", maxSplits: 1)
-            .last?
-            .lowercased()
-        guard host == "github.com" else { return nil }
 
         let path = String(raw[raw.index(after: separatorIndex)...])
         return remote(fromPath: path, rawValue: raw)
